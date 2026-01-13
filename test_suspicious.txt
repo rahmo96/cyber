@@ -1,0 +1,20 @@
+This is a test file with suspicious patterns.
+
+AutoOpen macro detected here.
+Shell command execution test.
+Execute function call.
+Base64 encoded content.
+PowerShell command execution.
+cmd.exe invocation test.
+WScript.Shell object creation.
+CreateObject("WScript.Shell")
+ActiveXObject test.
+eval() function call.
+exec() function call.
+DownloadString method.
+Invoke-Expression command.
+Invoke-Item command.
+Start-Process command.
+
+This file should trigger multiple threat detections when placed in sandbox_env.
+
