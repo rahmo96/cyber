@@ -1,138 +1,394 @@
 """
-Threat Detection Engine Module
-
-This module provides static analysis capabilities to detect suspicious patterns
-in files, including macro-like signatures and calculates SHA-256 hashes for
-forensic purposes.
+Detection Engine for NetGuard-CLI
+Analyzes network traffic patterns to detect HSE ransomware attack behaviors.
 """
 
-import hashlib
-import re
-from pathlib import Path
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass, field
+from collections import defaultdict
+from sniffer import PacketInfo
+import time
+from datetime import datetime
 
 
-class ThreatAnalyzer:
-    """
-    Analyzes files for suspicious patterns and calculates cryptographic hashes.
+@dataclass
+class SecurityAlert:
+    """Represents a detected security anomaly."""
+    alert_type: str
+    severity: str
+    description: str
+    source_ip: str
+    dest_ip: str
+    timestamp: float
+    details: Dict = field(default_factory=dict)
     
-    This class implements static analysis to detect potential threats without
-    executing any code, making it safe for use in a sandbox environment.
-    """
-    
-    # Suspicious patterns that may indicate malicious macros or scripts
-    SUSPICIOUS_PATTERNS = [
-        (r'(?i)\bAutoOpen\b', 'AutoOpen Macro'),
-        (r'(?i)\bShell\b', 'Shell Execution'),
-        (r'(?i)\bExecute\b', 'Execute Command'),
-        (r'(?i)\bBase64\b', 'Base64 Encoding'),
-        (r'(?i)\bPowerShell\b', 'PowerShell Command'),
-        (r'(?i)\bcmd\.exe\b', 'Command Prompt Execution'),
-        (r'(?i)\bwscript\.shell\b', 'WScript Shell'),
-        (r'(?i)\bCreateObject\s*\(', 'Object Creation'),
-        (r'(?i)\bActiveXObject\b', 'ActiveX Object'),
-        (r'(?i)\beval\s*\(', 'Eval Function'),
-        (r'(?i)\bexec\s*\(', 'Exec Function'),
-        (r'(?i)\bdownloadstring\b', 'Download String'),
-        (r'(?i)\binvoke-expression\b', 'Invoke Expression'),
-        (r'(?i)\binvoke-item\b', 'Invoke Item'),
-        (r'(?i)\bstart-process\b', 'Start Process'),
-    ]
-    
-    def __init__(self):
-        """Initialize the ThreatAnalyzer with compiled regex patterns."""
-        self.compiled_patterns = [
-            (re.compile(pattern), description)
-            for pattern, description in self.SUSPICIOUS_PATTERNS
-        ]
-    
-    def calculate_sha256(self, file_path: Path) -> str:
-        """
-        Calculate the SHA-256 hash of a file.
-        
-        Args:
-            file_path: Path to the file to hash
-            
-        Returns:
-            Hexadecimal string representation of the SHA-256 hash
-            
-        Raises:
-            FileNotFoundError: If the file does not exist
-            IOError: If the file cannot be read
-        """
-        sha256_hash = hashlib.sha256()
-        
-        try:
-            with open(file_path, 'rb') as f:
-                # Read file in chunks to handle large files efficiently
-                for chunk in iter(lambda: f.read(4096), b''):
-                    sha256_hash.update(chunk)
-        except Exception as e:
-            raise IOError(f"Error reading file {file_path}: {str(e)}")
-        
-        return sha256_hash.hexdigest()
-    
-    def scan_file(self, file_path: Path) -> Dict[str, any]:
-        """
-        Scan a file for suspicious patterns and calculate its hash.
-        
-        Args:
-            file_path: Path to the file to scan
-            
-        Returns:
-            Dictionary containing:
-                - 'file_path': Path to the scanned file
-                - 'sha256': SHA-256 hash of the file
-                - 'threats_detected': List of detected threat descriptions
-                - 'is_threat': Boolean indicating if any threats were found
-                - 'file_size': Size of the file in bytes
-        """
-        if not file_path.exists():
-            raise FileNotFoundError(f"File not found: {file_path}")
-        
-        threats_detected: List[str] = []
-        file_size = file_path.stat().st_size
-        
-        # Calculate hash
-        sha256 = self.calculate_sha256(file_path)
-        
-        # Try to read file content for pattern matching
-        # Only read text-based files, skip binary files that might cause issues
-        try:
-            # Attempt to read as text with multiple encodings
-            content = None
-            encodings = ['utf-8', 'latin-1', 'cp1252', 'ascii']
-            
-            for encoding in encodings:
-                try:
-                    with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
-                        content = f.read()
-                    break
-                except (UnicodeDecodeError, UnicodeError):
-                    continue
-            
-            # If we couldn't read as text, try reading as bytes and decode with errors='ignore'
-            if content is None:
-                with open(file_path, 'rb') as f:
-                    raw_content = f.read()
-                    content = raw_content.decode('utf-8', errors='ignore')
-            
-            # Scan for suspicious patterns
-            for pattern, description in self.compiled_patterns:
-                if pattern.search(content):
-                    if description not in threats_detected:
-                        threats_detected.append(description)
-        
-        except Exception as e:
-            # If we can't read the file, we'll still return the hash
-            # but mark it as potentially suspicious due to read errors
-            threats_detected.append(f"File read error: {str(e)}")
-        
+    def to_dict(self) -> Dict:
+        """Convert alert to dictionary for logging."""
         return {
-            'file_path': str(file_path),
-            'sha256': sha256,
-            'threats_detected': threats_detected,
-            'is_threat': len(threats_detected) > 0,
-            'file_size': file_size
+            'timestamp': datetime.fromtimestamp(self.timestamp).isoformat(),
+            'alert_type': self.alert_type,
+            'severity': self.severity,
+            'description': self.description,
+            'source_ip': self.source_ip,
+            'dest_ip': self.dest_ip,
+            'details': str(self.details)
         }
+
+
+class DetectionEngine:
+    """
+    Detection engine for identifying HSE ransomware attack patterns:
+    - Data exfiltration (large data transfers to external IPs)
+    - C2 beaconing (consistent interval communication)
+    - Port scanning (rapid port enumeration)
+    """
+    
+    def __init__(
+        self,
+        exfiltration_threshold_mb: float = 5.0,
+        exfiltration_window_seconds: int = 30,
+        beaconing_interval_seconds: int = 5,
+        beaconing_tolerance_seconds: float = 1.0,
+        port_scan_threshold: int = 10,
+        port_scan_window_seconds: int = 10,
+        internal_ip_ranges: Optional[List[str]] = None
+    ):
+        """
+        Initialize the detection engine with configurable thresholds.
+        
+        Args:
+            exfiltration_threshold_mb: Data threshold in MB for exfiltration alert
+            exfiltration_window_seconds: Time window for exfiltration detection
+            beaconing_interval_seconds: Expected interval for beaconing detection
+            beaconing_tolerance_seconds: Tolerance for beaconing interval matching
+            port_scan_threshold: Number of ports to trigger port scan alert
+            port_scan_window_seconds: Time window for port scan detection
+            internal_ip_ranges: List of IP ranges considered internal (CIDR notation)
+        """
+        self.exfiltration_threshold_bytes = exfiltration_threshold_mb * 1024 * 1024
+        self.exfiltration_window = exfiltration_window_seconds
+        self.beaconing_interval = beaconing_interval_seconds
+        self.beaconing_tolerance = beaconing_tolerance_seconds
+        self.port_scan_threshold = port_scan_threshold
+        self.port_scan_window = port_scan_window_seconds
+        
+        # Default internal IP ranges (RFC 1918 private addresses)
+        if internal_ip_ranges is None:
+            self.internal_ip_ranges = [
+                "10.0.0.0/8",
+                "172.16.0.0/12",
+                "192.168.0.0/16",
+                "127.0.0.0/8"
+            ]
+        else:
+            self.internal_ip_ranges = internal_ip_ranges
+        
+        # Data structures for tracking
+        self.exfiltration_tracker: Dict[Tuple[str, str], List[Tuple[float, int]]] = defaultdict(list)
+        self.beaconing_tracker: Dict[Tuple[str, str], List[float]] = defaultdict(list)
+        self.port_scan_tracker: Dict[Tuple[str, str], Dict[int, float]] = defaultdict(lambda: defaultdict(float))
+        
+        # Recent flows for UI display
+        self.recent_flows: List[PacketInfo] = []
+        self.max_recent_flows = 100
+        
+        # Active alerts
+        self.active_alerts: List[SecurityAlert] = []
+        self.max_alerts = 50
+    
+    def _is_internal_ip(self, ip: str) -> bool:
+        """
+        Check if an IP address is internal (private).
+        
+        Args:
+            ip: IP address string
+            
+        Returns:
+            True if IP is internal, False otherwise
+        """
+        from ipaddress import ip_address, ip_network
+        
+        try:
+            ip_obj = ip_address(ip)
+            for ip_range in self.internal_ip_ranges:
+                if ip_obj in ip_network(ip_range, strict=False):
+                    return True
+            return False
+        except ValueError:
+            return False
+    
+    def _is_external_ip(self, ip: str) -> bool:
+        """
+        Check if an IP address is external (public internet).
+        Excludes special addresses like broadcast, multicast, and link-local.
+        
+        Args:
+            ip: IP address string
+            
+        Returns:
+            True if IP is external/public, False otherwise
+        """
+        from ipaddress import ip_address, ip_network
+        
+        # First check if it's internal
+        if self._is_internal_ip(ip):
+            return False
+        
+        try:
+            ip_obj = ip_address(ip)
+            
+            # Exclude special addresses that shouldn't be considered external:
+            # - 255.255.255.255 (broadcast)
+            # - 0.0.0.0 (unspecified/any)
+            if ip == "255.255.255.255" or ip == "0.0.0.0":
+                return False
+            
+            # Exclude multicast addresses (224.0.0.0/4)
+            multicast_network = ip_network("224.0.0.0/4", strict=False)
+            if ip_obj in multicast_network:
+                return False
+            
+            # Exclude link-local addresses (169.254.0.0/16)
+            link_local_network = ip_network("169.254.0.0/16", strict=False)
+            if ip_obj in link_local_network:
+                return False
+            
+            # If it's not internal and not special, it's external
+            return True
+        except ValueError:
+            return False
+    
+    def _cleanup_old_data(self, current_time: float) -> None:
+        """Remove old data outside detection windows."""
+        # Clean exfiltration tracker
+        for key in list(self.exfiltration_tracker.keys()):
+            self.exfiltration_tracker[key] = [
+                (ts, size) for ts, size in self.exfiltration_tracker[key]
+                if current_time - ts <= self.exfiltration_window
+            ]
+            if not self.exfiltration_tracker[key]:
+                del self.exfiltration_tracker[key]
+        
+        # Clean beaconing tracker
+        for key in list(self.beaconing_tracker.keys()):
+            self.beaconing_tracker[key] = [
+                ts for ts in self.beaconing_tracker[key]
+                if current_time - ts <= self.beaconing_interval * 10  # Keep last 10 intervals
+            ]
+            if not self.beaconing_tracker[key]:
+                del self.beaconing_tracker[key]
+        
+        # Clean port scan tracker
+        for key in list(self.port_scan_tracker.keys()):
+            ports = self.port_scan_tracker[key]
+            for port in list(ports.keys()):
+                if current_time - ports[port] > self.port_scan_window:
+                    del ports[port]
+            if not ports:
+                del self.port_scan_tracker[key]
+    
+    def _detect_exfiltration(self, packet: PacketInfo) -> Optional[SecurityAlert]:
+        """
+        Detect data exfiltration: large data transfers to external IPs.
+        
+        Args:
+            packet: Packet information
+            
+        Returns:
+            SecurityAlert if exfiltration detected, None otherwise
+        """
+        source_ip = packet.source_ip
+        dest_ip = packet.dest_ip
+        
+        # Only check if internal IP is sending to external IP
+        if not (self._is_internal_ip(source_ip) and self._is_external_ip(dest_ip)):
+            return None
+        
+        key = (source_ip, dest_ip)
+        current_time = packet.timestamp
+        
+        # Add packet to tracker
+        self.exfiltration_tracker[key].append((current_time, packet.payload_size))
+        
+        # Calculate total data in window
+        total_bytes = sum(
+            size for ts, size in self.exfiltration_tracker[key]
+            if current_time - ts <= self.exfiltration_window
+        )
+        
+        if total_bytes >= self.exfiltration_threshold_bytes:
+            mb_transferred = total_bytes / (1024 * 1024)
+            return SecurityAlert(
+                alert_type="Data Exfiltration",
+                severity="HIGH",
+                description=f"Large data transfer detected: {mb_transferred:.2f} MB sent to external IP",
+                source_ip=source_ip,
+                dest_ip=dest_ip,
+                timestamp=current_time,
+                details={
+                    'total_bytes': total_bytes,
+                    'mb_transferred': mb_transferred,
+                    'window_seconds': self.exfiltration_window
+                }
+            )
+        
+        return None
+    
+    def _detect_beaconing(self, packet: PacketInfo) -> Optional[SecurityAlert]:
+        """
+        Detect C2 beaconing: consistent interval communication patterns.
+        
+        Args:
+            packet: Packet information
+            
+        Returns:
+            SecurityAlert if beaconing detected, None otherwise
+        """
+        source_ip = packet.source_ip
+        dest_ip = packet.dest_ip
+        
+        # Only check if internal IP is contacting external IP
+        if not (self._is_internal_ip(source_ip) and self._is_external_ip(dest_ip)):
+            return None
+        
+        key = (source_ip, dest_ip)
+        current_time = packet.timestamp
+        
+        # Add timestamp to tracker
+        self.beaconing_tracker[key].append(current_time)
+        
+        # Need at least 3 beacons to detect pattern
+        if len(self.beaconing_tracker[key]) < 3:
+            return None
+        
+        # Check intervals between recent beacons
+        timestamps = sorted(self.beaconing_tracker[key])
+        intervals = [
+            timestamps[i] - timestamps[i-1]
+            for i in range(1, len(timestamps))
+        ]
+        
+        # Check if intervals are consistent (within tolerance)
+        if len(intervals) >= 2:
+            recent_intervals = intervals[-3:]  # Check last 3 intervals
+            avg_interval = sum(recent_intervals) / len(recent_intervals)
+            
+            # Check if average interval matches expected beaconing interval
+            if abs(avg_interval - self.beaconing_interval) <= self.beaconing_tolerance:
+                # Verify consistency: all intervals should be close to average
+                if all(abs(interval - avg_interval) <= self.beaconing_tolerance for interval in recent_intervals):
+                    return SecurityAlert(
+                        alert_type="C2 Beaconing",
+                        severity="HIGH",
+                        description=f"Consistent beaconing pattern detected: ~{avg_interval:.1f}s intervals",
+                        source_ip=source_ip,
+                        dest_ip=dest_ip,
+                        timestamp=current_time,
+                        details={
+                            'interval_seconds': avg_interval,
+                            'beacon_count': len(timestamps),
+                            'expected_interval': self.beaconing_interval
+                        }
+                    )
+        
+        return None
+    
+    def _detect_port_scan(self, packet: PacketInfo) -> Optional[SecurityAlert]:
+        """
+        Detect port scanning: rapid connection attempts to multiple ports.
+        
+        Args:
+            packet: Packet information
+            
+        Returns:
+            SecurityAlert if port scan detected, None otherwise
+        """
+        source_ip = packet.source_ip
+        dest_ip = packet.dest_ip
+        
+        # Only check if internal IP is scanning another internal IP
+        if not (self._is_internal_ip(source_ip) and self._is_internal_ip(dest_ip)):
+            return None
+        
+        if packet.dest_port is None:
+            return None
+        
+        key = (source_ip, dest_ip)
+        current_time = packet.timestamp
+        
+        # Track port access
+        self.port_scan_tracker[key][packet.dest_port] = current_time
+        
+        # Count unique ports accessed in window
+        ports_in_window = [
+            port for port, ts in self.port_scan_tracker[key].items()
+            if current_time - ts <= self.port_scan_window
+        ]
+        
+        if len(ports_in_window) > self.port_scan_threshold:
+            return SecurityAlert(
+                alert_type="Port Scan",
+                severity="MEDIUM",
+                description=f"Port scan detected: {len(ports_in_window)} ports accessed",
+                source_ip=source_ip,
+                dest_ip=dest_ip,
+                timestamp=current_time,
+                details={
+                    'ports_scanned': len(ports_in_window),
+                    'ports': sorted(ports_in_window)[:20],  # Limit to first 20
+                    'window_seconds': self.port_scan_window
+                }
+            )
+        
+        return None
+    
+    def analyze_packet(self, packet: PacketInfo) -> List[SecurityAlert]:
+        """
+        Analyze a single packet and return any detected alerts.
+        
+        Args:
+            packet: Packet information to analyze
+            
+        Returns:
+            List of SecurityAlert objects
+        """
+        alerts = []
+        current_time = packet.timestamp
+        
+        # Cleanup old data
+        self._cleanup_old_data(current_time)
+        
+        # Add to recent flows
+        self.recent_flows.append(packet)
+        if len(self.recent_flows) > self.max_recent_flows:
+            self.recent_flows.pop(0)
+        
+        # Run detection algorithms
+        exfiltration_alert = self._detect_exfiltration(packet)
+        if exfiltration_alert:
+            alerts.append(exfiltration_alert)
+        
+        beaconing_alert = self._detect_beaconing(packet)
+        if beaconing_alert:
+            alerts.append(beaconing_alert)
+        
+        port_scan_alert = self._detect_port_scan(packet)
+        if port_scan_alert:
+            alerts.append(port_scan_alert)
+        
+        # Add alerts to active alerts list
+        for alert in alerts:
+            self.active_alerts.append(alert)
+            if len(self.active_alerts) > self.max_alerts:
+                self.active_alerts.pop(0)
+        
+        return alerts
+    
+    def get_recent_flows(self, limit: int = 20) -> List[PacketInfo]:
+        """Get recent network flows."""
+        return self.recent_flows[-limit:]
+    
+    def get_active_alerts(self, limit: int = 10) -> List[SecurityAlert]:
+        """Get active security alerts."""
+        return self.active_alerts[-limit:]
 

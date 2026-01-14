@@ -1,315 +1,233 @@
 """
-PyGuard-Sandbox: EDR Simulation Tool
-
-Main entry point for the PyGuard-Sandbox application. This module provides
-a CLI dashboard using the rich library to display real-time threat detection
-status and manages the overall monitoring workflow.
+Main Entry Point for NetGuard-CLI
+HSE-Incident Detection Tool
 """
 
-import json
+import argparse
 import signal
 import sys
 import time
-from datetime import datetime
-from pathlib import Path
-from typing import List, Dict, Optional
-
+from typing import Optional
 from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
 from rich.live import Live
-from rich.layout import Layout
-from rich.text import Text
-
-from monitor import DirectoryMonitor
-from analyzer import ThreatAnalyzer
-from actions import IncidentResponse
+from sniffer import NetworkSniffer
+from analyzer import DetectionEngine
+from logger import AlertLogger
+from ui import Dashboard
 
 
-class PyGuardSandbox:
-    """
-    Main application class that orchestrates monitoring, analysis, and response.
+class NetGuardCLI:
+    """Main application class for NetGuard-CLI."""
     
-    This class manages the complete EDR simulation workflow including directory
-    monitoring, threat detection, incident response, and logging.
-    """
-    
-    def __init__(self, sandbox_dir: Path, quarantine_dir: Path, log_file: Path):
+    def __init__(
+        self,
+        interface: Optional[str] = None,
+        pcap_file: Optional[str] = None,
+        exfiltration_threshold: float = 5.0,
+        beaconing_interval: int = 5,
+        port_scan_threshold: int = 10
+    ):
         """
-        Initialize the PyGuard-Sandbox application.
+        Initialize NetGuard-CLI.
         
         Args:
-            sandbox_dir: Path to the sandbox directory to monitor
-            quarantine_dir: Path to the quarantine directory
-            log_file: Path to the activity log JSON file
+            interface: Network interface for live capture
+            pcap_file: Path to pcap file for simulation mode
+            exfiltration_threshold: MB threshold for exfiltration detection
+            beaconing_interval: Expected interval in seconds for beaconing
+            port_scan_threshold: Number of ports to trigger port scan alert
         """
-        self.sandbox_dir = Path(sandbox_dir)
-        self.quarantine_dir = Path(quarantine_dir)
-        self.log_file = Path(log_file)
         self.console = Console()
+        self.sniffer = NetworkSniffer(interface=interface, pcap_file=pcap_file)
+        self.analyzer = DetectionEngine(
+            exfiltration_threshold_mb=exfiltration_threshold,
+            beaconing_interval_seconds=beaconing_interval,
+            port_scan_threshold=port_scan_threshold
+        )
+        self.logger = AlertLogger()
+        self.dashboard = Dashboard()
         
-        # Initialize components
-        self.analyzer = ThreatAnalyzer()
-        self.incident_response = IncidentResponse(self.quarantine_dir)
-        self.monitor: Optional[DirectoryMonitor] = None
+        self.total_packets = 0
+        self.total_alerts = 0
+        self.running = True
         
-        # Statistics tracking
-        self.stats = {
-            'total_scanned': 0,
-            'threats_detected': 0,
-            'files_quarantined': 0,
-            'start_time': datetime.now()
-        }
-        
-        # Recent activity log
-        self.recent_activity: List[Dict] = []
-        self.max_recent_activity = 10
-        
-        # Ensure directories exist
-        self.sandbox_dir.mkdir(parents=True, exist_ok=True)
-        self.quarantine_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Setup signal handlers for graceful shutdown
+        # Setup signal handler for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
     
     def _signal_handler(self, signum, frame):
-        """Handle shutdown signals gracefully."""
-        self.console.print("\n[yellow]Shutting down PyGuard-Sandbox...[/yellow]")
-        self.stop()
+        """Handle shutdown signals."""
+        self.console.print("\n[yellow]Shutting down NetGuard-CLI...[/yellow]")
+        self.running = False
         sys.exit(0)
     
-    def _log_activity(self, activity: Dict) -> None:
+    def _packet_callback(self, packet_info) -> None:
         """
-        Log activity to the JSON log file.
+        Callback function for each captured packet.
         
         Args:
-            activity: Dictionary containing activity information
+            packet_info: PacketInfo object
         """
-        # Load existing log entries
-        log_entries = []
-        if self.log_file.exists():
-            try:
-                with open(self.log_file, 'r', encoding='utf-8') as f:
-                    log_entries = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                log_entries = []
+        self.total_packets += 1
         
-        # Add new entry
-        log_entries.append(activity)
+        # Analyze packet
+        alerts = self.analyzer.analyze_packet(packet_info)
         
-        # Write back to file
-        try:
-            with open(self.log_file, 'w', encoding='utf-8') as f:
-                json.dump(log_entries, f, indent=2, ensure_ascii=False)
-        except IOError as e:
-            self.console.print(f"[red]Error writing to log file: {e}[/red]")
+        # Log alerts
+        if alerts:
+            self.total_alerts += len(alerts)
+            self.logger.log_alerts(alerts)
     
-    def _process_file(self, file_path: Path) -> None:
-        """
-        Process a file: analyze it and respond if threats are detected.
+    def run(self) -> None:
+        """Run the main monitoring loop."""
+        mode_str = "Simulation Mode" if self.sniffer.is_simulation else "Live Capture Mode"
+        interface_str = self.sniffer.pcap_file if self.sniffer.is_simulation else (self.sniffer.interface or "default")
         
-        Args:
-            file_path: Path to the file to process
-        """
-        # Skip if file doesn't exist or is a directory
-        if not file_path.exists() or file_path.is_dir():
-            return
+        self.console.print(f"[bold green]NetGuard-CLI - HSE-Incident Detection Tool[/bold green]")
+        self.console.print(f"[cyan]Mode:[/cyan] {mode_str}")
+        self.console.print(f"[cyan]Source:[/cyan] {interface_str}")
+        self.console.print(f"[cyan]Starting monitoring...[/cyan]\n")
         
-        # Skip if file is in quarantine directory
-        if self.quarantine_dir in file_path.parents:
-            return
-        
-        # Skip if already disarmed
-        if file_path.suffix == '.disarmed':
-            return
-        
-        try:
-            # Analyze file
-            self.stats['total_scanned'] += 1
-            scan_result = self.analyzer.scan_file(file_path)
+        # Create Live display
+        with Live(
+            self.dashboard.create_layout(
+                flows=[],
+                alerts=[],
+                total_packets=0,
+                total_alerts=0
+            ),
+            refresh_per_second=2,
+            screen=True
+        ) as live:
+            # Start packet capture in a separate thread or use callback
+            import threading
             
-            # Create activity log entry
-            activity = {
-                'timestamp': datetime.now().isoformat(),
-                'filename': file_path.name,
-                'file_path': str(file_path),
-                'sha256': scan_result['sha256'],
-                'file_size': scan_result['file_size'],
-                'threats_detected': scan_result['threats_detected'],
-                'is_threat': scan_result['is_threat'],
-                'action_taken': 'None'
-            }
-            
-            # If threat detected, quarantine the file
-            if scan_result['is_threat']:
-                self.stats['threats_detected'] += 1
+            def capture_thread():
                 try:
-                    quarantine_path = self.incident_response.quarantine_file(
-                        file_path,
-                        scan_result['sha256']
-                    )
-                    activity['action_taken'] = f'Quarantined to {quarantine_path}'
-                    activity['quarantine_path'] = str(quarantine_path)
-                    self.stats['files_quarantined'] += 1
-                    
-                    self.console.print(
-                        f"[red]⚠ THREAT DETECTED[/red]: {file_path.name} "
-                        f"-> Quarantined"
-                    )
+                    self.sniffer.start_capture(self._packet_callback)
+                except StopIteration:
+                    pass
                 except Exception as e:
-                    activity['action_taken'] = f'Quarantine failed: {str(e)}'
-                    self.console.print(
-                        f"[red]ERROR[/red]: Failed to quarantine {file_path.name}: {e}"
+                    self.console.print(f"[red]Error: {e}[/red]")
+                    self.running = False
+            
+            # Start capture thread
+            capture_thread_obj = threading.Thread(target=capture_thread, daemon=True)
+            capture_thread_obj.start()
+            
+            # Update dashboard periodically
+            while self.running:
+                try:
+                    flows = self.analyzer.get_recent_flows(limit=20)
+                    # Get all alerts for accurate statistics (analyzer stores up to 50)
+                    all_alerts = self.analyzer.get_active_alerts(limit=50)
+                    # For display, show only recent 10 alerts
+                    recent_alerts = all_alerts[-10:] if len(all_alerts) > 10 else all_alerts
+                    
+                    self.dashboard.update_dashboard(
+                        live=live,
+                        flows=flows,
+                        alerts=all_alerts,  # Pass all alerts for statistics
+                        total_packets=self.total_packets,
+                        total_alerts=self.total_alerts
                     )
-            else:
-                self.console.print(
-                    f"[green]✓ Safe[/green]: {file_path.name} "
-                    f"(SHA-256: {scan_result['sha256'][:16]}...)"
-                )
-            
-            # Log activity
-            self._log_activity(activity)
-            
-            # Add to recent activity
-            self.recent_activity.insert(0, activity)
-            if len(self.recent_activity) > self.max_recent_activity:
-                self.recent_activity.pop()
+                    
+                    time.sleep(0.5)  # Update every 500ms
+                    
+                    # Check if capture thread is still alive
+                    if not capture_thread_obj.is_alive() and self.sniffer.is_simulation:
+                        # Simulation mode finished
+                        break
+                        
+                except KeyboardInterrupt:
+                    break
+                except Exception as e:
+                    self.console.print(f"[red]Dashboard error: {e}[/red]")
+                    break
         
-        except Exception as e:
-            self.console.print(
-                f"[red]ERROR[/red]: Failed to process {file_path.name}: {e}"
-            )
-    
-    def _create_dashboard(self) -> Layout:
-        """
-        Create the dashboard layout using rich.
-        
-        Returns:
-            Layout object containing the dashboard
-        """
-        layout = Layout()
-        
-        # Create header
-        header = Panel(
-            "[bold cyan]PyGuard-Sandbox[/bold cyan] - EDR Simulation Tool\n"
-            f"Monitoring: [yellow]{self.sandbox_dir}[/yellow]",
-            border_style="cyan"
-        )
-        
-        # Create statistics table
-        stats_table = Table(title="Statistics", show_header=True, header_style="bold magenta")
-        stats_table.add_column("Metric", style="cyan")
-        stats_table.add_column("Value", style="green")
-        
-        uptime = datetime.now() - self.stats['start_time']
-        stats_table.add_row("Uptime", str(uptime).split('.')[0])
-        stats_table.add_row("Files Scanned", str(self.stats['total_scanned']))
-        stats_table.add_row("Threats Detected", str(self.stats['threats_detected']))
-        stats_table.add_row("Files Quarantined", str(self.stats['files_quarantined']))
-        
-        quarantine_stats = self.incident_response.get_quarantine_stats()
-        stats_table.add_row("Quarantine Files", str(quarantine_stats['total_files']))
-        stats_table.add_row(
-            "Quarantine Size",
-            f"{quarantine_stats['total_size'] / 1024:.2f} KB"
-        )
-        
-        # Create recent activity table
-        activity_table = Table(title="Recent Activity", show_header=True, header_style="bold yellow")
-        activity_table.add_column("Time", style="dim")
-        activity_table.add_column("File", style="cyan")
-        activity_table.add_column("Status", justify="center")
-        activity_table.add_column("Threats", style="red")
-        
-        if self.recent_activity:
-            for activity in self.recent_activity[:5]:  # Show last 5
-                timestamp = datetime.fromisoformat(activity['timestamp'])
-                time_str = timestamp.strftime("%H:%M:%S")
-                filename = activity['filename']
-                
-                if activity['is_threat']:
-                    status = "[red]⚠ THREAT[/red]"
-                    threats = ", ".join(activity['threats_detected'][:2])
-                    if len(activity['threats_detected']) > 2:
-                        threats += "..."
-                else:
-                    status = "[green]✓ SAFE[/green]"
-                    threats = "None"
-                
-                activity_table.add_row(time_str, filename, status, threats)
-        else:
-            activity_table.add_row("--", "No activity yet", "--", "--")
-        
-        # Create status panel
-        monitor_status = "[green]●[/green] ACTIVE" if (
-            self.monitor and self.monitor.is_running()
-        ) else "[red]●[/red] INACTIVE"
-        
-        status_panel = Panel(
-            f"Monitor Status: {monitor_status}\n"
-            f"Log File: {self.log_file}\n"
-            f"Quarantine: {self.quarantine_dir}",
-            title="System Status",
-            border_style="blue"
-        )
-        
-        # Arrange layout
-        layout.split_column(
-            Layout(header, size=3),
-            Layout(name="main", ratio=2)
-        )
-        
-        layout["main"].split_row(
-            Layout(stats_table, name="stats"),
-            Layout(name="right")
-        )
-        
-        layout["right"].split_column(
-            Layout(activity_table, ratio=2),
-            Layout(status_panel, size=8)
-        )
-        
-        return layout
-    
-    def start(self) -> None:
-        """Start monitoring the sandbox directory."""
-        self.console.print("[bold green]Starting PyGuard-Sandbox...[/bold green]")
-        self.console.print(f"Monitoring directory: [cyan]{self.sandbox_dir}[/cyan]")
-        self.console.print(f"Quarantine directory: [yellow]{self.quarantine_dir}[/yellow]")
-        self.console.print(f"Activity log: [blue]{self.log_file}[/blue]\n")
-        
-        # Initialize monitor
-        self.monitor = DirectoryMonitor(self.sandbox_dir, self._process_file)
-        self.monitor.start()
-        
-        # Display dashboard
-        try:
-            with Live(self._create_dashboard(), refresh_per_second=2, screen=True) as live:
-                while True:
-                    live.update(self._create_dashboard())
-                    time.sleep(0.5)
-        except KeyboardInterrupt:
-            self.stop()
-    
-    def stop(self) -> None:
-        """Stop monitoring and cleanup."""
-        if self.monitor:
-            self.monitor.stop()
-        self.console.print("[yellow]PyGuard-Sandbox stopped.[/yellow]")
+        # Final summary
+        self.console.print(f"\n[bold]Session Summary:[/bold]")
+        self.console.print(f"Total Packets Processed: {self.total_packets:,}")
+        self.console.print(f"Total Alerts Detected: {self.total_alerts}")
+        self.console.print(f"Alerts logged to: alerts_log.csv")
 
 
 def main():
-    """Main entry point for the application."""
-    # Define paths relative to the script location
-    script_dir = Path(__file__).parent
-    sandbox_dir = script_dir / "sandbox_env"
-    quarantine_dir = script_dir / "quarantine"
-    log_file = script_dir / "activity_log.json"
+    """Main entry point."""
+    parser = argparse.ArgumentParser(
+        description="NetGuard-CLI: HSE-Incident Detection Tool - Network traffic analyzer for detecting ransomware attack patterns"
+    )
     
-    # Create and start the application
-    app = PyGuardSandbox(sandbox_dir, quarantine_dir, log_file)
-    app.start()
+    parser.add_argument(
+        "--interface",
+        "-i",
+        type=str,
+        default=None,
+        help="Network interface to capture from (default: default interface)"
+    )
+    
+    parser.add_argument(
+        "--pcap",
+        "-p",
+        type=str,
+        default=None,
+        help="Path to .pcap file for simulation mode (enables simulation mode)"
+    )
+    
+    parser.add_argument(
+        "--threshold",
+        "-t",
+        type=float,
+        default=5.0,
+        help="Exfiltration threshold in MB (default: 5.0)"
+    )
+    
+    parser.add_argument(
+        "--beacon-interval",
+        "-b",
+        type=int,
+        default=5,
+        help="Expected beaconing interval in seconds (default: 5)"
+    )
+    
+    parser.add_argument(
+        "--port-threshold",
+        type=int,
+        default=10,
+        help="Port scan threshold - number of ports to trigger alert (default: 10)"
+    )
+    
+    args = parser.parse_args()
+    
+    # Validate arguments
+    if args.interface and args.pcap:
+        parser.error("Cannot specify both --interface and --pcap. Use --pcap for simulation mode.")
+    
+    if args.threshold <= 0:
+        parser.error("--threshold must be greater than 0")
+    
+    if args.beacon_interval <= 0:
+        parser.error("--beacon-interval must be greater than 0")
+    
+    if args.port_threshold <= 0:
+        parser.error("--port-threshold must be greater than 0")
+    
+    # Create and run application
+    app = NetGuardCLI(
+        interface=args.interface,
+        pcap_file=args.pcap,
+        exfiltration_threshold=args.threshold,
+        beaconing_interval=args.beacon_interval,
+        port_scan_threshold=args.port_threshold
+    )
+    
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
