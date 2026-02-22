@@ -54,6 +54,9 @@ class DetectionEngine:
         beaconing_cv_threshold: float = 0.15,
         port_scan_threshold: int = 5,
         port_scan_window_seconds: int = 10,
+        spike_z_threshold: float = 3.0,
+        spike_window_seconds: int = 60,
+        spike_min_history_seconds: int = 10,
         internal_ip_ranges: Optional[List[str]] = None
     ):
         """
@@ -71,6 +74,11 @@ class DetectionEngine:
                 0.15 means ≤15% variation around the mean.
             port_scan_threshold: Number of ports to trigger port scan alert
             port_scan_window_seconds: Time window for port scan detection
+            spike_z_threshold: Z-score above which a 1-second bandwidth bucket is
+                flagged as a traffic spike. Default 3.0 (~99.7th percentile).
+            spike_window_seconds: Rolling history window (seconds) for baseline calculation.
+            spike_min_history_seconds: Minimum filled history buckets before alerting;
+                prevents false positives at startup.
             internal_ip_ranges: List of IP ranges considered internal (CIDR notation)
         """
         self.exfiltration_threshold_bytes = exfiltration_threshold_mb * 1024 * 1024
@@ -81,6 +89,9 @@ class DetectionEngine:
         self.beaconing_cv_threshold = beaconing_cv_threshold
         self.port_scan_threshold = port_scan_threshold
         self.port_scan_window = port_scan_window_seconds
+        self.spike_z_threshold = spike_z_threshold
+        self.spike_window = spike_window_seconds
+        self.spike_min_history = spike_min_history_seconds
         
         # Default internal IP ranges (RFC 1918 private addresses)
         if internal_ip_ranges is None:
@@ -97,6 +108,9 @@ class DetectionEngine:
         self.exfiltration_tracker: Dict[Tuple[str, str], List[Tuple[float, int]]] = defaultdict(list)
         self.beaconing_tracker: Dict[Tuple[str, str], List[float]] = defaultdict(list)
         self.port_scan_tracker: Dict[Tuple[str, str], Dict[int, float]] = defaultdict(lambda: defaultdict(float))
+
+        # Bandwidth spike tracker: source_ip → {unix_second_bucket: bytes_in_that_second}
+        self._bandwidth_tracker: Dict[str, Dict[int, int]] = defaultdict(dict)
 
         # Cooldown tracker: (source_ip, dest_ip, alert_type) → last alert timestamp
         # Prevents the same alert firing on every packet after a threshold is crossed.
@@ -200,6 +214,15 @@ class DetectionEngine:
                     del ports[port]
             if not ports:
                 del self.port_scan_tracker[key]
+
+        # Clean bandwidth spike tracker
+        current_bucket = int(current_time)
+        for src in list(self._bandwidth_tracker.keys()):
+            for bucket in list(self._bandwidth_tracker[src].keys()):
+                if current_bucket - bucket > self.spike_window:
+                    del self._bandwidth_tracker[src][bucket]
+            if not self._bandwidth_tracker[src]:
+                del self._bandwidth_tracker[src]
     
     def _is_in_cooldown(self, key: Tuple[str, str, str], current_time: float, cooldown_seconds: float) -> bool:
         """Return True if the alert key is still within its cooldown window."""
@@ -390,6 +413,79 @@ class DetectionEngine:
         
         return None
     
+    def _detect_traffic_spike(self, packet: PacketInfo) -> Optional[SecurityAlert]:
+        """
+        Detect sudden bandwidth spikes using a Z-score on a rolling per-second
+        histogram.
+
+        How it works:
+          1. Packet bytes are accumulated into 1-second time buckets per source IP.
+          2. After enough history is collected (spike_min_history_seconds buckets),
+             we compute the mean and standard deviation of all completed buckets
+             (all except the current, still-filling bucket).
+          3. If the current bucket's byte count deviates more than spike_z_threshold
+             standard deviations above the mean, a Traffic Spike alert fires.
+          4. A per-source 10-second cooldown prevents alert storms.
+
+        Args:
+            packet: Packet information
+
+        Returns:
+            SecurityAlert if a spike is detected, None otherwise
+        """
+        src = packet.source_ip
+        current_time = packet.timestamp
+        current_bucket = int(current_time)
+
+        buckets = self._bandwidth_tracker[src]
+        buckets[current_bucket] = buckets.get(current_bucket, 0) + packet.payload_size
+
+        # Need enough completed history buckets before we start comparing
+        completed_buckets = {b: v for b, v in buckets.items() if b < current_bucket}
+        if len(completed_buckets) < self.spike_min_history:
+            return None
+
+        history = list(completed_buckets.values())
+        current_rate = buckets[current_bucket]
+
+        mean = sum(history) / len(history)
+        if mean == 0:
+            return None
+
+        variance = sum((x - mean) ** 2 for x in history) / len(history)
+        std_dev = math.sqrt(variance)
+        if std_dev == 0:
+            return None
+
+        z_score = (current_rate - mean) / std_dev
+        if z_score < self.spike_z_threshold:
+            return None
+
+        cooldown_key = (src, "*", "Traffic Spike")
+        if self._is_in_cooldown(cooldown_key, current_time, 10.0):
+            return None
+        self._set_cooldown(cooldown_key, current_time)
+
+        return SecurityAlert(
+            alert_type="Traffic Spike",
+            severity="MEDIUM",
+            description=(
+                f"Bandwidth spike from {src}: "
+                f"{current_rate / 1024:.1f} KB/s (Z={z_score:.1f}, "
+                f"baseline avg {mean / 1024:.1f} KB/s)"
+            ),
+            source_ip=src,
+            dest_ip="*",
+            timestamp=current_time,
+            details={
+                'current_rate_bytes': current_rate,
+                'mean_rate_bytes': round(mean, 1),
+                'std_dev_bytes': round(std_dev, 1),
+                'z_score': round(z_score, 2),
+                'history_seconds': len(completed_buckets),
+            },
+        )
+
     def analyze_packet(self, packet: PacketInfo) -> List[SecurityAlert]:
         """
         Analyze a single packet and return any detected alerts.
@@ -423,6 +519,10 @@ class DetectionEngine:
         port_scan_alert = self._detect_port_scan(packet)
         if port_scan_alert:
             alerts.append(port_scan_alert)
+
+        spike_alert = self._detect_traffic_spike(packet)
+        if spike_alert:
+            alerts.append(spike_alert)
         
         # Add alerts to active alerts list
         for alert in alerts:

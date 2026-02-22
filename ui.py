@@ -35,32 +35,51 @@ class Dashboard:
             Rich Table object
         """
         table = Table(title="Recent Network Flows", box=box.ROUNDED, show_header=True)
-        table.add_column("Time", style="cyan", width=12)
-        table.add_column("Source IP", style="green", width=18)
-        table.add_column("Dest IP", style="yellow", width=18)
-        table.add_column("Protocol", style="blue", width=8)
-        table.add_column("Port", style="magenta", width=8)
+        table.add_column("Time", style="cyan", width=10)
+        table.add_column("Source IP", style="green", width=16)
+        table.add_column("Dest IP", style="yellow", width=16)
+        table.add_column("Proto", style="blue", width=6)
+        table.add_column("App", style="magenta", width=12)
+        table.add_column("Port", style="white", width=6)
         table.add_column("Size", style="white", width=10, justify="right")
-        
+
         # Show most recent flows (limit to 15 for display)
         recent_flows = flows[-15:] if len(flows) > 15 else flows
-        
+
+        # Colour-code application protocols so they stand out at a glance
+        _APP_STYLES = {
+            "HTTP": "bold green",
+            "TLS": "bold cyan",
+            "TLS/HTTPS": "bold cyan",
+            "TLS-ALT": "cyan",
+            "DNS": "bold yellow",
+            "SSH": "bold red",
+            "RDP": "bold red",
+            "FTP": "bold magenta",
+            "FTP-DATA": "magenta",
+            "SMTP": "blue",
+            "SMTPS": "blue",
+        }
+
         for flow in reversed(recent_flows):
             timestamp_str = time.strftime("%H:%M:%S", time.localtime(flow.timestamp))
             port_str = str(flow.dest_port) if flow.dest_port else "N/A"
             size_str = f"{flow.payload_size} B"
-            
+            app = getattr(flow, "app_protocol", "Unknown")
+            app_style = _APP_STYLES.get(app, "dim white")
+
             table.add_row(
                 timestamp_str,
                 flow.source_ip,
                 flow.dest_ip,
                 flow.protocol,
+                f"[{app_style}]{app}[/{app_style}]",
                 port_str,
-                size_str
+                size_str,
             )
-        
+
         if not flows:
-            table.add_row("No flows", "", "", "", "", "")
+            table.add_row("No flows", "", "", "", "", "", "")
         
         return table
     
@@ -96,7 +115,7 @@ class Dashboard:
             alert_text.append(f"[{alert.severity}] ", style=style)
             alert_text.append(f"{alert.alert_type}: ", style="bold")
             alert_text.append(f"{alert.description}\n", style="white")
-            alert_text.append(f"  Source: {alert.source_ip} → Dest: {alert.dest_ip}\n", style="dim")
+            alert_text.append(f"  {alert.source_ip} -> {alert.dest_ip}\n", style="dim")
             alert_text.append("\n", style="white")
         
         return Panel(alert_text, title="Security Alerts", border_style="red")
