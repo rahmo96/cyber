@@ -23,9 +23,9 @@ class NetGuardCLI:
         self,
         interface: Optional[str] = None,
         pcap_file: Optional[str] = None,
-        exfiltration_threshold: float = 5.0,
+        exfiltration_threshold: float = 1.0,
         beaconing_interval: int = 5,
-        port_scan_threshold: int = 10
+        port_scan_threshold: int = 5
     ):
         """
         Initialize NetGuard-CLI.
@@ -178,8 +178,8 @@ def main():
         "--threshold",
         "-t",
         type=float,
-        default=5.0,
-        help="Exfiltration threshold in MB (default: 5.0)"
+        default=1.0,
+        help="Exfiltration threshold in MB (default: 1.0)"
     )
     
     parser.add_argument(
@@ -193,8 +193,8 @@ def main():
     parser.add_argument(
         "--port-threshold",
         type=int,
-        default=10,
-        help="Port scan threshold - number of ports to trigger alert (default: 10)"
+        default=5,
+        help="Port scan threshold - number of ports to trigger alert (default: 5)"
     )
     
     args = parser.parse_args()

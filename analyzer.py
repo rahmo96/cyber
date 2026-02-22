@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict
 from sniffer import PacketInfo
+import math
 import time
 from datetime import datetime
 
@@ -45,22 +46,29 @@ class DetectionEngine:
     
     def __init__(
         self,
-        exfiltration_threshold_mb: float = 5.0,
+        exfiltration_threshold_mb: float = 1.0,
         exfiltration_window_seconds: int = 30,
         beaconing_interval_seconds: int = 5,
         beaconing_tolerance_seconds: float = 1.0,
-        port_scan_threshold: int = 10,
+        beaconing_min_interval_seconds: float = 2.0,
+        beaconing_cv_threshold: float = 0.15,
+        port_scan_threshold: int = 5,
         port_scan_window_seconds: int = 10,
         internal_ip_ranges: Optional[List[str]] = None
     ):
         """
         Initialize the detection engine with configurable thresholds.
-        
+
         Args:
             exfiltration_threshold_mb: Data threshold in MB for exfiltration alert
             exfiltration_window_seconds: Time window for exfiltration detection
-            beaconing_interval_seconds: Expected interval for beaconing detection
-            beaconing_tolerance_seconds: Tolerance for beaconing interval matching
+            beaconing_interval_seconds: Legacy — kept for CLI compatibility (unused internally)
+            beaconing_tolerance_seconds: Legacy — kept for CLI compatibility (unused internally)
+            beaconing_min_interval_seconds: Minimum average interval (seconds) to flag as beaconing;
+                contacts more frequent than this are assumed to be normal traffic
+            beaconing_cv_threshold: Coefficient of variation threshold (0–1). Intervals whose CV
+                is at or below this value are flagged as suspiciously regular (C2 beaconing).
+                0.15 means ≤15% variation around the mean.
             port_scan_threshold: Number of ports to trigger port scan alert
             port_scan_window_seconds: Time window for port scan detection
             internal_ip_ranges: List of IP ranges considered internal (CIDR notation)
@@ -69,6 +77,8 @@ class DetectionEngine:
         self.exfiltration_window = exfiltration_window_seconds
         self.beaconing_interval = beaconing_interval_seconds
         self.beaconing_tolerance = beaconing_tolerance_seconds
+        self.beaconing_min_interval = beaconing_min_interval_seconds
+        self.beaconing_cv_threshold = beaconing_cv_threshold
         self.port_scan_threshold = port_scan_threshold
         self.port_scan_window = port_scan_window_seconds
         
@@ -87,6 +97,10 @@ class DetectionEngine:
         self.exfiltration_tracker: Dict[Tuple[str, str], List[Tuple[float, int]]] = defaultdict(list)
         self.beaconing_tracker: Dict[Tuple[str, str], List[float]] = defaultdict(list)
         self.port_scan_tracker: Dict[Tuple[str, str], Dict[int, float]] = defaultdict(lambda: defaultdict(float))
+
+        # Cooldown tracker: (source_ip, dest_ip, alert_type) → last alert timestamp
+        # Prevents the same alert firing on every packet after a threshold is crossed.
+        self._alert_cooldowns: Dict[Tuple[str, str, str], float] = {}
         
         # Recent flows for UI display
         self.recent_flows: List[PacketInfo] = []
@@ -187,6 +201,15 @@ class DetectionEngine:
             if not ports:
                 del self.port_scan_tracker[key]
     
+    def _is_in_cooldown(self, key: Tuple[str, str, str], current_time: float, cooldown_seconds: float) -> bool:
+        """Return True if the alert key is still within its cooldown window."""
+        last = self._alert_cooldowns.get(key)
+        return last is not None and (current_time - last) < cooldown_seconds
+
+    def _set_cooldown(self, key: Tuple[str, str, str], current_time: float) -> None:
+        """Record the current time as the last-fired timestamp for the given alert key."""
+        self._alert_cooldowns[key] = current_time
+
     def _detect_exfiltration(self, packet: PacketInfo) -> Optional[SecurityAlert]:
         """
         Detect data exfiltration: large data transfers to external IPs.
@@ -216,7 +239,11 @@ class DetectionEngine:
             if current_time - ts <= self.exfiltration_window
         )
         
+        cooldown_key = (source_ip, dest_ip, "Data Exfiltration")
         if total_bytes >= self.exfiltration_threshold_bytes:
+            if self._is_in_cooldown(cooldown_key, current_time, self.exfiltration_window):
+                return None
+            self._set_cooldown(cooldown_key, current_time)
             mb_transferred = total_bytes / (1024 * 1024)
             return SecurityAlert(
                 alert_type="Data Exfiltration",
@@ -231,67 +258,89 @@ class DetectionEngine:
                     'window_seconds': self.exfiltration_window
                 }
             )
-        
+        else:
+            # Transfer has slowed down — reset cooldown so the next spike fires a fresh alert
+            self._alert_cooldowns.pop(cooldown_key, None)
+
         return None
     
     def _detect_beaconing(self, packet: PacketInfo) -> Optional[SecurityAlert]:
         """
-        Detect C2 beaconing: consistent interval communication patterns.
-        
+        Detect C2 beaconing: any suspiciously regular communication interval.
+
+        Instead of checking against a single configured interval, this uses the
+        coefficient of variation (CV = std_dev / mean) of the recent inter-packet
+        gaps. A very low CV means the traffic is arriving at a machine-precise
+        cadence — a hallmark of automated C2 heartbeats rather than human browsing.
+
         Args:
             packet: Packet information
-            
+
         Returns:
             SecurityAlert if beaconing detected, None otherwise
         """
         source_ip = packet.source_ip
         dest_ip = packet.dest_ip
-        
-        # Only check if internal IP is contacting external IP
+
+        # Only flag internal → external communication
         if not (self._is_internal_ip(source_ip) and self._is_external_ip(dest_ip)):
             return None
-        
+
         key = (source_ip, dest_ip)
         current_time = packet.timestamp
-        
-        # Add timestamp to tracker
+
         self.beaconing_tracker[key].append(current_time)
-        
-        # Need at least 3 beacons to detect pattern
-        if len(self.beaconing_tracker[key]) < 3:
+
+        # Need at least 6 contact points (5 intervals) for a reliable pattern
+        if len(self.beaconing_tracker[key]) < 6:
             return None
-        
-        # Check intervals between recent beacons
+
         timestamps = sorted(self.beaconing_tracker[key])
-        intervals = [
-            timestamps[i] - timestamps[i-1]
-            for i in range(1, len(timestamps))
-        ]
-        
-        # Check if intervals are consistent (within tolerance)
-        if len(intervals) >= 2:
-            recent_intervals = intervals[-3:]  # Check last 3 intervals
-            avg_interval = sum(recent_intervals) / len(recent_intervals)
-            
-            # Check if average interval matches expected beaconing interval
-            if abs(avg_interval - self.beaconing_interval) <= self.beaconing_tolerance:
-                # Verify consistency: all intervals should be close to average
-                if all(abs(interval - avg_interval) <= self.beaconing_tolerance for interval in recent_intervals):
-                    return SecurityAlert(
-                        alert_type="C2 Beaconing",
-                        severity="HIGH",
-                        description=f"Consistent beaconing pattern detected: ~{avg_interval:.1f}s intervals",
-                        source_ip=source_ip,
-                        dest_ip=dest_ip,
-                        timestamp=current_time,
-                        details={
-                            'interval_seconds': avg_interval,
-                            'beacon_count': len(timestamps),
-                            'expected_interval': self.beaconing_interval
-                        }
-                    )
-        
-        return None
+        intervals = [timestamps[i] - timestamps[i - 1] for i in range(1, len(timestamps))]
+
+        # Analyse the most recent 8 intervals to stay current
+        recent_intervals = intervals[-8:]
+        if len(recent_intervals) < 4:
+            return None
+
+        avg_interval = sum(recent_intervals) / len(recent_intervals)
+
+        # Skip if the average gap is shorter than the minimum threshold —
+        # frequent legitimate traffic (e.g. streaming, DNS) would otherwise trigger alerts
+        if avg_interval < self.beaconing_min_interval:
+            return None
+
+        variance = sum((x - avg_interval) ** 2 for x in recent_intervals) / len(recent_intervals)
+        std_dev = math.sqrt(variance)
+        cv = std_dev / avg_interval if avg_interval > 0 else 1.0
+
+        if cv > self.beaconing_cv_threshold:
+            return None
+
+        cooldown_key = (source_ip, dest_ip, "C2 Beaconing")
+        cooldown_window = avg_interval * len(recent_intervals)
+        if self._is_in_cooldown(cooldown_key, current_time, cooldown_window):
+            return None
+        self._set_cooldown(cooldown_key, current_time)
+
+        return SecurityAlert(
+            alert_type="C2 Beaconing",
+            severity="HIGH",
+            description=(
+                f"Regular beaconing pattern detected to external IP: "
+                f"~{avg_interval:.1f}s interval (CV={cv:.2f})"
+            ),
+            source_ip=source_ip,
+            dest_ip=dest_ip,
+            timestamp=current_time,
+            details={
+                'avg_interval_seconds': round(avg_interval, 2),
+                'std_dev_seconds': round(std_dev, 2),
+                'coefficient_of_variation': round(cv, 3),
+                'beacon_count': len(timestamps),
+                'intervals_analysed': len(recent_intervals),
+            }
+        )
     
     def _detect_port_scan(self, packet: PacketInfo) -> Optional[SecurityAlert]:
         """
@@ -306,7 +355,6 @@ class DetectionEngine:
         source_ip = packet.source_ip
         dest_ip = packet.dest_ip
         
-        # Only check if internal IP is scanning another internal IP
         if not (self._is_internal_ip(source_ip) and self._is_internal_ip(dest_ip)):
             return None
         
