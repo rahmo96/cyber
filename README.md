@@ -1,248 +1,333 @@
 # NetGuard-CLI: HSE-Incident Detection Tool
 
-A Python CLI application for real-time network traffic analysis and detection of HSE ransomware attack patterns. This tool monitors network traffic to identify data exfiltration, C2 beaconing, and port scanning behaviors similar to those observed in the 2021 HSE (Health Service Executive) ransomware attack.
+A Python CLI application for real-time network traffic analysis and detection of HSE ransomware attack patterns. Monitors live traffic or replays `.pcap` files to identify data exfiltration, C2 beaconing, port scanning, and bandwidth spikes — with Deep Packet Inspection, composable traffic filters, and automatic PCAP forensic export.
+
+---
 
 ## Overview
 
-NetGuard-CLI is designed to detect three critical attack patterns associated with ransomware operations:
+NetGuard-CLI detects attack patterns associated with ransomware operations, modelled on the 2021 HSE (Health Service Executive) Conti ransomware attack:
 
-1. **Data Exfiltration**: Identifies large data transfers from internal networks to external IPs
-2. **C2 Beaconing**: Detects consistent communication patterns with command-and-control servers
-3. **Port Scanning**: Identifies rapid port enumeration attempts within internal networks
+| Detection | What it catches | Severity |
+|---|---|---|
+| **Data Exfiltration** | Large outbound transfers to external IPs | HIGH |
+| **C2 Beaconing** | Machine-regular communication intervals (any cadence) | HIGH |
+| **Port Scanning** | Rapid multi-port enumeration on internal hosts | MEDIUM |
+| **Traffic Spike** | Z-score bandwidth anomaly above rolling baseline | MEDIUM |
 
-## HSE Attack Context
-
-### The 2021 HSE Ransomware Attack
-
-The Health Service Executive (HSE) of Ireland suffered a devastating ransomware attack in May 2021, orchestrated by the Conti ransomware group. This attack disrupted healthcare services across Ireland and resulted in significant data exfiltration.
-
-### Attack Stages Detected by NetGuard-CLI
-
-#### 1. Data Exfiltration Stage
-During the HSE attack, attackers exfiltrated approximately 700 GB of sensitive healthcare data before deploying ransomware. NetGuard-CLI detects this pattern by:
-- Monitoring cumulative data transfers from internal IPs to external IPs
-- Alerting when any external IP receives more than 5MB (configurable) within a 30-second window
-- This helps identify potential data exfiltration before the full attack is deployed
-
-#### 2. C2 Beaconing Stage
-The attackers used Cobalt Strike C2 (Command and Control) infrastructure to maintain persistent communication. NetGuard-CLI detects this by:
-- Identifying consistent communication intervals (e.g., every 5 seconds) between internal IPs and external IPs
-- Pattern matching against known beaconing behaviors
-- This helps identify compromised systems maintaining C2 communication
-
-#### 3. Port Scanning Stage
-Initial reconnaissance involved port scanning to identify vulnerable systems. NetGuard-CLI detects this by:
-- Monitoring rapid connection attempts to multiple ports
-- Alerting when a single internal IP contacts more than 10 different ports on another internal IP within 10 seconds
-- This helps identify lateral movement and reconnaissance activities
+---
 
 ## Installation
 
-### Prerequisites
-
-- Python 3.8 or higher
-- Administrator/root privileges (for live packet capture)
-- Network interface access
-
-### Install Dependencies
+### Linux (recommended path)
 
 ```bash
+# Clone / download the project
+cd netguard-cli
+
+# Run the automated setup script — handles system deps, venv, pip, and setcap
+chmod +x setup.sh
+./setup.sh
+```
+
+The script will:
+1. Install `libpcap-dev` via your distro's package manager
+2. Create a Python virtual environment under `venv/`
+3. Install all Python dependencies
+4. Grant `cap_net_raw` to the venv Python binary so you can capture without `sudo`
+
+Then activate the environment:
+```bash
+source venv/bin/activate
+```
+
+#### Manual Linux install
+
+```bash
+# Ubuntu / Debian
+sudo apt-get install libpcap-dev python3-dev build-essential
+
+# Fedora / RHEL / CentOS
+sudo dnf install libpcap-devel python3-devel gcc
+
+# Arch / Manjaro
+sudo pacman -S libpcap python
+
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-**Note**: On Linux, you may need to install additional dependencies for scapy:
-```bash
-# Ubuntu/Debian
-sudo apt-get install python3-dev libpcap-dev
+#### Packet capture privileges (Linux)
 
-# macOS
-brew install libpcap
+Live capture requires raw socket access. Two options:
+
+**Option A — sudo (simplest)**
+```bash
+sudo python3 main.py --interface eth0
 ```
 
-## Usage
+**Option B — setcap (no sudo at runtime, recommended)**
+```bash
+# Grant capability to the venv Python binary once
+sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))
 
-### Live Capture Mode
+# Verify
+getcap $(readlink -f $(which python3))
+# Expected: python3 = cap_net_raw,cap_net_admin+eip
 
-Monitor live network traffic on a specific interface:
+# Now run without sudo
+python3 main.py --interface eth0
+```
+
+### Windows
 
 ```bash
-# Default interface
-python main.py
-
-# Specific interface
-python main.py --interface eth0
-
-# Windows example
+pip install -r requirements.txt
+# Run as Administrator for live capture
 python main.py --interface "Ethernet"
 ```
 
-### Simulation Mode
-
-Test the tool using a pre-captured pcap file:
+### macOS
 
 ```bash
-python main.py --pcap capture.pcap
+brew install libpcap
+pip install -r requirements.txt
+sudo python3 main.py --interface en0
 ```
 
-### Custom Thresholds
+---
 
-Adjust detection thresholds:
+## Quick Start
 
 ```bash
-# Custom exfiltration threshold (10 MB)
-python main.py --threshold 10.0
+# List available interfaces
+python3 main.py --list-interfaces
 
-# Custom beaconing interval (10 seconds)
-python main.py --beacon-interval 10
+# Live capture on eth0
+sudo python3 main.py --interface eth0
 
-# Custom port scan threshold (20 ports)
-python main.py --port-threshold 20
+# Replay a pcap file (no root needed)
+python3 main.py --pcap capture.pcap
 
-# Combined example
-python main.py --interface eth0 --threshold 10.0 --beacon-interval 7 --port-threshold 15
+# Live capture with BPF filter (only HTTPS traffic)
+sudo python3 main.py --interface eth0 --bpf "tcp port 443"
+
+# Auto-export pcap on HIGH alerts + filter to one subnet
+sudo python3 main.py --interface eth0 --filter-ip 10.0.0.0/8 --export-pcap
 ```
 
-### Command-Line Arguments
+---
+
+## All Command-Line Arguments
 
 ```
---interface, -i    Network interface to capture from (default: default interface)
---pcap, -p         Path to .pcap file for simulation mode
---threshold, -t    Exfiltration threshold in MB (default: 5.0)
---beacon-interval, -b  Expected beaconing interval in seconds (default: 5)
---port-threshold   Port scan threshold - number of ports to trigger alert (default: 10)
+Capture source:
+  --interface, -i   Network interface for live capture (default: system default)
+  --pcap, -p        Path to .pcap file for simulation/replay mode
+  --list-interfaces List available interfaces and exit
+
+Detection thresholds:
+  --threshold, -t   Exfiltration threshold in MB (default: 1.0)
+  --beacon-interval, -b  Reference beaconing interval in seconds (default: 5)
+  --port-threshold  Unique ports to trigger port scan alert (default: 5)
+
+Filtering:
+  --bpf             BPF capture filter, e.g. "tcp port 80" (live capture only)
+  --filter-ip CIDR  Only analyse traffic involving this CIDR range (repeatable)
+  --filter-protocol PROTO  Only analyse this protocol, e.g. HTTP DNS TLS (repeatable)
+
+PCAP forensics:
+  --export-pcap     Auto-dump rolling packet buffer on every HIGH-severity alert
+  --pcap-output-dir Directory for exported pcap files (default: forensics/)
 ```
 
-## Dashboard Features
+### Filter examples
 
-The CLI dashboard provides real-time visualization:
+```bash
+# Only analyse DNS traffic from the internal network
+python3 main.py --pcap capture.pcap --filter-ip 192.168.0.0/16 --filter-protocol DNS
 
-- **Recent Network Flows Table**: Displays the most recent network connections with source/destination IPs, protocols, ports, and payload sizes
-- **Security Alerts Panel**: Shows high-priority security alerts in red, with timestamps and detailed descriptions
-- **Status Bar**: Displays total packets processed, total alerts detected, and runtime
+# Only watch HTTPS and TLS
+sudo python3 main.py -i eth0 --filter-protocol TLS --filter-protocol HTTP
 
-## Output
+# Capture only TCP traffic at kernel level (BPF), then narrow further to one subnet
+sudo python3 main.py -i eth0 --bpf "tcp" --filter-ip 10.0.0.0/8
+```
 
-### Console Dashboard
-
-The tool displays a live-updating dashboard showing:
-- Recent network flows
-- Active security alerts
-- Real-time statistics
-
-### CSV Logging
-
-All detected anomalies are automatically logged to `alerts_log.csv` with the following columns:
-- `timestamp`: ISO format timestamp
-- `alert_type`: Type of alert (Data Exfiltration, C2 Beaconing, Port Scan)
-- `severity`: Alert severity (HIGH, MEDIUM)
-- `description`: Detailed description of the alert
-- `source_ip`: Source IP address
-- `dest_ip`: Destination IP address
-- `details`: Additional alert details (JSON string)
+---
 
 ## Architecture
 
-### Module Structure
+```
+netguard-cli/
+├── main.py       Entry point, CLI parsing, orchestration, signal handling
+├── sniffer.py    Packet capture (Scapy), DPI, queue-based dispatch, pcap export buffer
+├── analyzer.py   Detection engine: exfiltration, beaconing, port scan, traffic spike
+├── dpi.py        Deep Packet Inspection — protocol ID from payload bytes
+├── filters.py    Composable traffic filter system (IP range, protocol, port, time)
+├── logger.py     Thread-safe CSV logger + PcapExporter for Wireshark forensics
+├── ui.py         Rich library live dashboard
+├── test_alerts.py  Offline test suite (no network or root required)
+├── setup.sh      Linux automated setup script
+└── requirements.txt
+```
 
-- **`sniffer.py`**: Packet capture and extraction using scapy
-- **`analyzer.py`**: Detection engine with three detection algorithms
-- **`logger.py`**: CSV logging functionality
-- **`ui.py`**: Rich library-based CLI dashboard
-- **`main.py`**: Main entry point and application orchestration
+### Module responsibilities
 
-### Detection Algorithms
+| Module | Responsibility |
+|---|---|
+| `sniffer.py` | Raw packet capture via Scapy; DPI-enriched `PacketInfo`; producer/consumer queue to prevent packet loss; rolling 1000-packet PCAP buffer |
+| `dpi.py` | Stateless payload inspector — identifies HTTP, TLS, SSH, DNS, FTP, SMTP, RDP, mDNS, NTP by signature, falls back to port mapping |
+| `filters.py` | BPF-style composable filters combinable with `&`, `\|`, `~` operators |
+| `analyzer.py` | Four detection algorithms with alert deduplication/cooldown |
+| `logger.py` | Thread-safe CSV append; `PcapExporter` dumps forensic captures to `forensics/` |
+| `ui.py` | Live Rich dashboard: flows table (with DPI App column), alerts panel, statistics |
+| `main.py` | Wires everything together; safe signal handling; privilege check with `setcap` hint |
 
-1. **Exfiltration Detection**: Sliding window tracking of data volumes per external IP
-2. **Beaconing Detection**: Statistical analysis of communication intervals
-3. **Port Scan Detection**: Time-windowed port access counting
+---
+
+## Detection Algorithms
+
+### 1. Data Exfiltration
+Sliding-window byte counter per `(source_ip, dest_ip)` pair. Fires when cumulative bytes to an **external** IP exceed the threshold within the window. Cooldown prevents alert spam; resets when traffic drops below threshold.
+
+### 2. C2 Beaconing
+Collects inter-packet timestamps for each `(internal → external)` pair. Fires when the **coefficient of variation** (CV = std\_dev / mean) of the last 8 intervals falls below 15% — machine-precise timing regardless of the actual interval value. Requires 6+ contact points to prevent false positives.
+
+### 3. Port Scanning
+Counts unique destination ports per `(source, dest)` pair within a rolling time window. Fires when the count exceeds the threshold.
+
+### 4. Traffic Spike
+Per-source 1-second bandwidth buckets. After 10 seconds of baseline history, fires when the current bucket's byte count is ≥ 3 standard deviations above the rolling mean (Z-score ≥ 3.0). 10-second cooldown between alerts.
+
+---
+
+## Deep Packet Inspection
+
+The `dpi.py` module identifies the application-layer protocol from raw payload bytes:
+
+| Protocol | Detection method |
+|---|---|
+| HTTP | Request verb (`GET`, `POST`, …) or `HTTP/` response prefix |
+| TLS | TLS record byte `0x16/0x17` + version bytes `0x03 0x00–0x04` |
+| SSH | `SSH-` banner prefix |
+| DNS | UDP/TCP port 53 with valid payload |
+| FTP | 3-digit status codes or `USER`/`RETR`/`STOR` commands |
+| SMTP | `220`, `EHLO`, `MAIL FROM` signatures |
+| RDP | TPKT header `0x03 0x00` |
+| mDNS | UDP port 5353 |
+| NTP | UDP port 123 with valid LI/VN/Mode byte |
+| Others | Port-number fallback table (MySQL, PostgreSQL, Redis, MongoDB …) |
+
+The identified protocol appears as the **App** column in the dashboard's flows table, colour-coded for quick scanning.
+
+---
+
+## Output
+
+### Live Dashboard
+
+```
++- Recent Network Flows --------+  +- Security Alerts --------+
+| Time     Src IP        ...App |  | [HIGH] Data Exfiltration  |
+| 14:22:01 192.168.1.100 ...TLS |  | 192.168.1.5 -> 5.5.5.5   |
+| 14:22:01 192.168.1.100 ...DNS |  | [HIGH] C2 Beaconing ...   |
++-------------------------------+  +---------------------------+
+Packets: 14,832 | Alerts: 3 | Runtime: 00:02:14 | Ctrl+C to stop
+```
+
+### CSV Log (`alerts_log.csv`)
+
+| timestamp | alert_type | severity | description | source_ip | dest_ip | details |
+|---|---|---|---|---|---|---|
+| 2025-02-22T14:22:05 | Data Exfiltration | HIGH | 1.05 MB sent to external IP | 192.168.1.5 | 5.5.5.5 | {...} |
+
+### Forensic PCAP (`forensics/`)
+
+When `--export-pcap` is used, a `.pcap` file is written to `forensics/` on every HIGH-severity alert, named with a timestamp and alert type, e.g.:
+```
+forensics/capture_20250222_142205_Data_Exfiltration.pcap
+```
+Open directly in Wireshark for full packet analysis.
+
+---
+
+## Testing (no root required)
+
+```bash
+python3 test_alerts.py
+```
+
+Runs 6 offline tests that inject crafted `PacketInfo` objects directly into the detection engine and DPI module — no network interface or root privileges needed:
+
+| Test | What it verifies |
+|---|---|
+| 1 | Data Exfiltration alert fires at 1 MB threshold |
+| 2 | C2 Beaconing detected via CV at 10-second intervals |
+| 3 | Port Scan fires after 6 unique ports |
+| 4 | Traffic Spike detected via Z-score ≥ 3.0 |
+| 5 | DPI correctly identifies 8 protocol signatures |
+| 6 | Filter combinators (`&`, `\|`, `~`) accept/reject correctly |
+
+---
 
 ## Security Considerations
 
-- **Administrator Access**: Live packet capture requires elevated privileges
-- **Network Monitoring**: This tool monitors network traffic and should only be used on networks you own or have explicit permission to monitor
-- **Privacy**: Be aware that packet capture may contain sensitive data
-- **Testing**: Always test in simulation mode first using pcap files
+- **Authorisation**: Only monitor networks you own or have explicit written permission to monitor. Unauthorised packet capture may violate laws.
+- **Privilege model**: Prefer `setcap` over running the entire process as root to reduce the attack surface.
+- **CSV log**: `alerts_log.csv` may contain sensitive IP addresses — secure it appropriately.
+- **PCAP exports**: `forensics/*.pcap` files contain raw packet payloads — treat as sensitive.
+- **False positives**: Detection uses statistical heuristics. Tune thresholds for your environment.
 
-## Limitations
-
-- Detection is based on heuristics and may produce false positives
-- Encrypted traffic payload sizes are still visible but content is not analyzed
-- Detection windows are configurable but may need tuning for specific network environments
-- Internal IP detection uses RFC 1918 ranges by default (configurable)
-
-## Example Scenarios
-
-### Detecting Data Exfiltration
-
-```bash
-# Monitor for large data transfers
-python main.py --interface eth0 --threshold 5.0
-```
-
-When an internal IP sends more than 5MB to an external IP within 30 seconds, an alert is triggered.
-
-### Detecting C2 Beaconing
-
-```bash
-# Monitor for 5-second beaconing patterns
-python main.py --interface eth0 --beacon-interval 5
-```
-
-When an internal IP contacts an external IP at consistent 5-second intervals, an alert is triggered.
-
-### Detecting Port Scans
-
-```bash
-# Monitor for port scanning
-python main.py --interface eth0 --port-threshold 10
-```
-
-When an internal IP accesses more than 10 different ports on another internal IP within 10 seconds, an alert is triggered.
+---
 
 ## Troubleshooting
 
-### Permission Errors
-
-On Linux/macOS, you may need sudo privileges:
+### `Operation not permitted` on Linux
 ```bash
-sudo python main.py --interface eth0
+# Option 1 — sudo
+sudo python3 main.py --interface eth0
+
+# Option 2 — setcap (permanent, no sudo at runtime)
+sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))
 ```
 
-### Interface Not Found
-
-List available interfaces:
+### No packets captured
 ```bash
-# Linux
+# Confirm interface name
 ip link show
+python3 main.py --list-interfaces
 
-# macOS
-ifconfig
-
-# Windows
-ipconfig
+# Check you have the right interface (try 'lo' for loopback testing)
+sudo python3 main.py --interface lo
 ```
 
-### No Packets Captured
+### `ModuleNotFoundError: scapy`
+```bash
+pip install -r requirements.txt
+# If using a venv, ensure it is activated first
+source venv/bin/activate
+```
 
-- Verify interface name is correct
-- Check that you have permission to capture on the interface
-- Ensure network traffic is present on the interface
+### `ImportError: libpcap.so` on Linux
+```bash
+sudo apt-get install libpcap-dev    # Debian/Ubuntu
+sudo dnf install libpcap-devel      # Fedora/RHEL
+```
 
-## Contributing
-
-This tool is designed for cybersecurity professionals and incident responders. Contributions should maintain code quality, include type hints, and follow the modular architecture.
-
-## License
-
-This tool is provided for educational and security research purposes. Use responsibly and only on networks you own or have permission to monitor.
+---
 
 ## References
 
-- HSE Ransomware Attack (2021): A case study in healthcare cybersecurity
-- Cobalt Strike: C2 framework commonly used in ransomware operations
-- Conti Ransomware Group: Threat actor behind the HSE attack
+- HSE Ransomware Attack (2021) — Health Service Executive of Ireland
+- Conti Ransomware Group — Threat actor behind the HSE attack
+- Cobalt Strike — C2 framework used during the attack
+- RFC 1918 — Private address space used for internal IP classification
+- RFC 5737 — TEST-NET address ranges used in documentation and test code
+
+---
 
 ## Disclaimer
 
-This tool is for authorized security testing and incident detection only. Unauthorized network monitoring may violate laws and regulations. Always obtain proper authorization before monitoring network traffic.
-
+For authorised security testing and incident detection only. Unauthorised network monitoring may violate applicable laws and regulations.

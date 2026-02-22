@@ -1,3 +1,29 @@
+# NetGuard-CLI Python dependencies
 scapy>=2.5.0
 rich>=13.0.0
 
+# =============================================================================
+# Linux system packages required BEFORE running pip install:
+#
+#   Ubuntu / Debian / Mint:
+#     sudo apt-get install libpcap-dev python3-dev build-essential
+#
+#   Fedora / RHEL / CentOS:
+#     sudo dnf install libpcap-devel python3-devel gcc
+#
+#   Arch / Manjaro:
+#     sudo pacman -S libpcap python
+#
+#   openSUSE:
+#     sudo zypper install libpcap-devel python3-devel
+#
+# Packet capture privileges (Linux):
+#   Option A — run with sudo:
+#     sudo python3 main.py
+#
+#   Option B — grant capability to the venv Python binary (no sudo at runtime):
+#     sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))
+#
+# Or run the automated setup script which handles all of the above:
+#   chmod +x setup.sh && ./setup.sh
+# =============================================================================

@@ -204,11 +204,15 @@ class NetworkSniffer:
                 prn=producer,
                 store=False,
             )
-        except PermissionError:
+        except (PermissionError, OSError) as exc:
+            # On Linux, raw-socket creation without root raises OSError (errno EPERM/EACCES)
+            # in addition to Python's PermissionError subclass
             raise PermissionError(
-                "Live packet capture requires administrator / root privileges. "
-                "Run with 'sudo' on Linux/macOS or as Administrator on Windows."
-            )
+                f"Live packet capture requires root privileges on Linux. "
+                f"Run with 'sudo python3 main.py' or grant the capability:\n"
+                f"  sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))\n"
+                f"Original error: {exc}"
+            ) from exc
         except KeyboardInterrupt:
             pass
         except Exception as exc:
