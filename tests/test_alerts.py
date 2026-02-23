@@ -1,6 +1,10 @@
 """
 Manual trigger test for NetGuard-CLI alerts.
 
+Run from the project root:
+    python tests/test_alerts.py
+    python -m tests.test_alerts
+
 Feeds crafted PacketInfo objects directly to the DetectionEngine and other
 modules — no real network traffic or PCAP file needed.
 
@@ -8,12 +12,18 @@ Run with:
     python test_alerts.py
 """
 
+import sys
+import os
 import time
 import random
-from analyzer import DetectionEngine
-from sniffer import PacketInfo
-from dpi import DeepPacketInspector
-from filters import build_filter, IPRangeFilter, ProtocolFilter
+
+# Ensure the project root is on sys.path when the file is run directly
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.analyzer import DetectionEngine
+from src.sniffer import PacketInfo
+from src.dpi import DeepPacketInspector
+from src.filters import build_filter, IPRangeFilter, ProtocolFilter
 
 INTERNAL_IP = "192.168.1.100"   # simulated local machine
 EXTERNAL_IP = "203.0.113.42"    # simulated C2 / attacker server (TEST-NET-3, RFC 5737)

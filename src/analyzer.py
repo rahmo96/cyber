@@ -6,7 +6,7 @@ Analyzes network traffic patterns to detect HSE ransomware attack behaviors.
 from typing import Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
 from collections import defaultdict
-from sniffer import PacketInfo
+from .sniffer import PacketInfo
 import math
 import time
 from datetime import datetime

@@ -26,7 +26,7 @@ from typing import Callable, Deque, Iterator, Optional
 from scapy.all import IP, Packet, rdpcap, sniff, wrpcap
 from scapy.layers.inet import TCP, UDP
 
-from dpi import DeepPacketInspector
+from .dpi import DeepPacketInspector
 
 
 @dataclass

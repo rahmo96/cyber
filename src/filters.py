@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from ipaddress import ip_address, ip_network
 from typing import List, Optional
 
-from sniffer import PacketInfo
+from .sniffer import PacketInfo
 
 
 # ---------------------------------------------------------------------------

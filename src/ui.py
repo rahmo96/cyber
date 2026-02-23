@@ -11,8 +11,8 @@ from rich.panel import Panel
 from rich.layout import Layout
 from rich.text import Text
 from rich import box
-from sniffer import PacketInfo
-from analyzer import SecurityAlert
+from .sniffer import PacketInfo
+from .analyzer import SecurityAlert
 import time
 
 

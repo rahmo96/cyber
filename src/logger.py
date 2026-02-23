@@ -14,11 +14,11 @@ import threading
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from analyzer import SecurityAlert
+from .analyzer import SecurityAlert
 
 if TYPE_CHECKING:
     # Avoid a circular import at runtime; only used for type hints
-    from sniffer import NetworkSniffer
+    from .sniffer import NetworkSniffer
 
 
 class AlertLogger:

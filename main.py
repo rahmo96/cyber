@@ -3,14 +3,10 @@ Main Entry Point for NetGuard-CLI
 HSE-Incident Detection Tool
 
 Linux notes:
-  - Live packet capture requires root privileges OR the Python binary to have
-    the cap_net_raw capability set:
-        sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))
-  - Run under sudo for full functionality:
-        sudo python3 main.py --interface eth0
-  - List available interfaces with:
-        ip link show       (Linux)
-        python3 -c "from scapy.all import get_if_list; print(get_if_list())"
+  - Live capture needs root or cap_net_raw:
+      sudo python3 main.py --interface eth0
+      sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))
+  - List interfaces: ip link show
 """
 
 import _thread
@@ -26,11 +22,11 @@ from typing import List, Optional
 from rich.console import Console
 from rich.live import Live
 
-from analyzer import DetectionEngine
-from filters import TrafficFilter, build_filter
-from logger import AlertLogger, PcapExporter
-from sniffer import NetworkSniffer, PacketInfo
-from ui import Dashboard
+from src.analyzer import DetectionEngine
+from src.filters import TrafficFilter, build_filter
+from src.logger import AlertLogger, PcapExporter
+from src.sniffer import NetworkSniffer, PacketInfo
+from src.ui import Dashboard
 
 
 # ---------------------------------------------------------------------------
