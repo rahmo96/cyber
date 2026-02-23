@@ -156,7 +156,7 @@ python3 main.py --pcap capture.pcap
 sudo python3 main.py --interface eth0 --threshold 0.5 --port-threshold 3
 
 # Run offline tests — no network or root required
-python3 test_alerts.py
+python3 tests/test_alerts.py
 ```
 
 ---
@@ -177,7 +177,7 @@ python3 test_alerts.py
 ### Option 1 — Offline test script (no root, no network)
 
 ```bash
-python3 test_alerts.py
+python3 tests/test_alerts.py
 ```
 
 Injects crafted packets directly into the engine. Fires all 6 alert types in ~15 seconds:
@@ -250,15 +250,19 @@ Free pcap sources with real attack traffic:
 
 ```
 netguard-cli/
-├── main.py          Entry point, CLI parsing, orchestration, signal handling
-├── sniffer.py       Packet capture (Scapy), DPI, queue-based dispatch, pcap export buffer
-├── analyzer.py      Detection engine: exfiltration, beaconing, port scan, traffic spike
-├── dpi.py           Deep Packet Inspection — protocol ID from payload bytes
-├── filters.py       Composable traffic filter system (IP range, protocol, port, time)
-├── logger.py        Thread-safe CSV logger + PcapExporter for Wireshark forensics
-├── ui.py            Rich library live dashboard
-├── test_alerts.py   Offline test suite — no network or root required
-├── setup.sh         Linux automated setup script
+├── src/
+│   ├── __init__.py
+│   ├── analyzer.py      Detection engine: exfiltration, beaconing, port scan, traffic spike
+│   ├── dpi.py           Deep Packet Inspection — protocol ID from payload bytes
+│   ├── filters.py       Composable traffic filter system (IP range, protocol, port, time)
+│   ├── logger.py        Thread-safe CSV logger + PcapExporter for Wireshark forensics
+│   ├── sniffer.py       Packet capture (Scapy), DPI, queue-based dispatch, pcap export buffer
+│   └── ui.py            Rich library live dashboard
+├── tests/
+│   ├── __init__.py
+│   └── test_alerts.py   Offline test suite — no network or root required
+├── main.py              Entry point, CLI parsing, orchestration, signal handling
+├── setup.sh             Linux automated setup script
 └── requirements.txt
 ```
 
@@ -266,33 +270,33 @@ netguard-cli/
 
 | Module | Responsibility |
 |---|---|
-| `sniffer.py` | Raw capture via Scapy; DPI-enriched `PacketInfo`; producer/consumer queue (10k capacity) to prevent packet loss; rolling 1000-packet PCAP buffer; BPF filter support |
-| `dpi.py` | Stateless payload inspector — identifies 10+ protocols by signature, falls back to well-known port table |
-| `filters.py` | BPF-style composable filters combined with `&` (AND), `\|` (OR), `~` (NOT) |
-| `analyzer.py` | Four detection algorithms each with independent alert cooldown/deduplication |
-| `logger.py` | Thread-safe CSV append (reentrant lock); `PcapExporter` writes timestamped `.pcap` files |
-| `ui.py` | Live Rich dashboard: colour-coded flows table (App column), alerts panel, statistics breakdown |
-| `main.py` | Orchestration; safe SIGINT/SIGTERM handling; privilege check with `setcap` guidance; `--list-interfaces` |
+| `src/sniffer.py` | Raw capture via Scapy; DPI-enriched `PacketInfo`; producer/consumer queue (10k capacity) to prevent packet loss; rolling 1000-packet PCAP buffer |
+| `src/dpi.py` | Stateless payload inspector — identifies 10+ protocols by signature, falls back to well-known port table |
+| `src/filters.py` | BPF-style composable filters combined with `&` (AND), `\|` (OR), `~` (NOT) |
+| `src/analyzer.py` | Four detection algorithms each with independent alert cooldown/deduplication |
+| `src/logger.py` | Thread-safe CSV append (reentrant lock); `PcapExporter` writes timestamped `.pcap` files |
+| `src/ui.py` | Live Rich dashboard: colour-coded flows table (App column), alerts panel, statistics breakdown |
+| `main.py` | Orchestration; safe SIGINT/SIGTERM handling; privilege check with `setcap` guidance |
 
 ### Data flow
 
 ```
 Network interface / pcap file
         |
-    sniffer.py  ──(Scapy sniff loop)──> queue ──> consumer thread
-        |                                               |
-      DPI                                         PacketInfo
-   (dpi.py)                                            |
-                                               filters.py  (drop?)
-                                                    |
-                                              analyzer.py
-                                          (4 detection algorithms)
-                                                    |
-                                          ┌─────────┴──────────┐
-                                       alerts               flows
-                                          |                    |
-                                     logger.py             ui.py
-                               (CSV + PCAP export)     (Rich dashboard)
+  src/sniffer.py  ──(Scapy sniff loop)──> queue ──> consumer thread
+        |                                                   |
+  src/dpi.py                                          PacketInfo
+   (protocol ID)                                           |
+                                                  src/filters.py  (drop?)
+                                                           |
+                                                  src/analyzer.py
+                                              (4 detection algorithms)
+                                                           |
+                                               ┌───────────┴───────────┐
+                                            alerts                  flows
+                                               |                       |
+                                        src/logger.py            src/ui.py
+                                      (CSV + PCAP export)     (Rich dashboard)
 ```
 
 ---
@@ -343,7 +347,7 @@ Z-score anomaly detection on per-second bandwidth buckets.
 
 ## Deep Packet Inspection
 
-`dpi.py` identifies the application-layer protocol from raw payload bytes — **independent of port numbers**. This catches malware that uses non-standard ports.
+`src/dpi.py` identifies the application-layer protocol from raw payload bytes — **independent of port numbers**. This catches malware that uses non-standard ports.
 
 Detection order: payload signatures first, port fallback second.
 
@@ -376,7 +380,7 @@ The identified protocol appears as the colour-coded **App** column in the flows 
 
 ## Traffic Filters
 
-`filters.py` provides a composable BPF-style filter system. Filters can be combined with Python operators:
+`src/filters.py` provides a composable BPF-style filter system. Filters can be combined with Python operators:
 
 | Operator | Meaning | Example |
 |---|---|---|
@@ -455,7 +459,7 @@ Open in Wireshark for full protocol dissection and packet-level forensics.
 Run the offline test suite — **no network interface, no root, no pcap file needed**:
 
 ```bash
-python3 test_alerts.py
+python3 tests/test_alerts.py
 ```
 
 | Test | Alert type | Pass condition |
@@ -497,8 +501,8 @@ sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))
 ### No packets captured
 ```bash
 # List available interfaces
-python3 main.py --list-interfaces
 ip link show
+python3 -c "from scapy.all import get_if_list; print(get_if_list())"
 
 # Try the loopback interface for basic connectivity testing
 sudo python3 main.py --interface lo
@@ -510,7 +514,7 @@ sudo tcpdump -i eth0 -c 5
 ### Alerts not firing
 ```bash
 # Run the offline test suite to confirm detection logic works
-python3 test_alerts.py
+python3 tests/test_alerts.py
 
 # Lower thresholds for testing
 python3 main.py --pcap capture.pcap --threshold 0.1 --port-threshold 3
