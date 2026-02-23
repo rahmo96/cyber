@@ -91,7 +91,6 @@ class NetGuardCLI:
         interface: Optional[str] = None,
         pcap_file: Optional[str] = None,
         exfiltration_threshold: float = 1.0,
-        beaconing_interval: int = 5,
         port_scan_threshold: int = 5,
         bpf_filter: str = "",
         filter_ips: Optional[List[str]] = None,
@@ -108,7 +107,6 @@ class NetGuardCLI:
         )
         self.analyzer = DetectionEngine(
             exfiltration_threshold_mb=exfiltration_threshold,
-            beaconing_interval_seconds=beaconing_interval,
             port_scan_threshold=port_scan_threshold,
         )
         self.logger = AlertLogger()
@@ -279,100 +277,37 @@ class NetGuardCLI:
 # CLI entry point
 # ---------------------------------------------------------------------------
 
-def _list_interfaces() -> None:
-    """Print available network interfaces and exit."""
-    try:
-        from scapy.all import get_if_list, get_if_addr
-        print("Available network interfaces:")
-        for iface in get_if_list():
-            try:
-                addr = get_if_addr(iface)
-            except Exception:
-                addr = "N/A"
-            print(f"  {iface:<20} {addr}")
-    except Exception as exc:
-        print(f"Could not enumerate interfaces: {exc}")
-        print("Try: ip link show   (Linux)  or  ipconfig   (Windows)")
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=(
-            "NetGuard-CLI: HSE-Incident Detection Tool -- "
-            "network traffic analyser for detecting ransomware attack patterns"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Linux quick-start:\n"
-            "  sudo python3 main.py --interface eth0\n\n"
-            "Simulation mode (no root needed):\n"
-            "  python3 main.py --pcap capture.pcap\n\n"
-            "List interfaces:\n"
-            "  python3 main.py --list-interfaces"
-        ),
+        description="NetGuard-CLI: HSE-Incident Detection Tool",
     )
 
-    # Capture source
     parser.add_argument("--interface", "-i", type=str, default=None,
-                        help="Network interface for live capture (default: system default)")
+                        help="Network interface for live capture")
     parser.add_argument("--pcap", "-p", type=str, default=None,
-                        help="Path to .pcap file for simulation / replay mode")
-    parser.add_argument("--list-interfaces", action="store_true",
-                        help="List available network interfaces and exit")
-
-    # Detection thresholds
+                        help="Path to .pcap file for simulation mode")
     parser.add_argument("--threshold", "-t", type=float, default=1.0,
-                        help="Exfiltration threshold in MB (default: 1.0)")
-    parser.add_argument("--beacon-interval", "-b", type=int, default=5,
-                        help="Reference beaconing interval in seconds (default: 5)")
+                        help="Exfiltration alert threshold in MB (default: 1.0)")
     parser.add_argument("--port-threshold", type=int, default=5,
-                        help="Port scan threshold -- unique ports to trigger alert (default: 5)")
-
-    # Capture filtering
-    parser.add_argument("--bpf", type=str, default="",
-                        help='BPF filter for live capture, e.g. "tcp port 443"')
-    parser.add_argument("--filter-ip", type=str, action="append", default=None,
-                        dest="filter_ips", metavar="CIDR",
-                        help="Only analyse traffic involving this CIDR (repeatable)")
-    parser.add_argument("--filter-protocol", type=str, action="append", default=None,
-                        dest="filter_protocols", metavar="PROTO",
-                        help="Only analyse this protocol, e.g. HTTP DNS TLS (repeatable)")
-
-    # PCAP export
-    parser.add_argument("--export-pcap", action="store_true", default=False,
-                        help="Export rolling packet buffer to .pcap on HIGH-severity alerts")
-    parser.add_argument("--pcap-output-dir", type=str, default="forensics",
-                        help="Directory for auto-exported .pcap files (default: forensics/)")
+                        help="Unique ports to trigger port scan alert (default: 5)")
 
     args = parser.parse_args()
-
-    if args.list_interfaces:
-        _list_interfaces()
-        sys.exit(0)
 
     if args.interface and args.pcap:
         parser.error("Cannot use --interface and --pcap together.")
     if args.threshold <= 0:
         parser.error("--threshold must be > 0")
-    if args.beacon_interval <= 0:
-        parser.error("--beacon-interval must be > 0")
     if args.port_threshold <= 0:
         parser.error("--port-threshold must be > 0")
 
-    # Warn early if live capture is requested without root
     _check_privileges(live_capture=args.pcap is None)
 
     app = NetGuardCLI(
         interface=args.interface,
         pcap_file=args.pcap,
         exfiltration_threshold=args.threshold,
-        beaconing_interval=args.beacon_interval,
         port_scan_threshold=args.port_threshold,
-        bpf_filter=args.bpf,
-        filter_ips=args.filter_ips,
-        filter_protocols=args.filter_protocols,
-        export_pcap_on_alert=args.export_pcap,
-        pcap_output_dir=args.pcap_output_dir,
     )
 
     try:

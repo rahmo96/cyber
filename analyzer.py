@@ -48,8 +48,6 @@ class DetectionEngine:
         self,
         exfiltration_threshold_mb: float = 1.0,
         exfiltration_window_seconds: int = 30,
-        beaconing_interval_seconds: int = 5,
-        beaconing_tolerance_seconds: float = 1.0,
         beaconing_min_interval_seconds: float = 2.0,
         beaconing_cv_threshold: float = 0.15,
         port_scan_threshold: int = 5,
@@ -65,26 +63,21 @@ class DetectionEngine:
         Args:
             exfiltration_threshold_mb: Data threshold in MB for exfiltration alert
             exfiltration_window_seconds: Time window for exfiltration detection
-            beaconing_interval_seconds: Legacy — kept for CLI compatibility (unused internally)
-            beaconing_tolerance_seconds: Legacy — kept for CLI compatibility (unused internally)
-            beaconing_min_interval_seconds: Minimum average interval (seconds) to flag as beaconing;
-                contacts more frequent than this are assumed to be normal traffic
-            beaconing_cv_threshold: Coefficient of variation threshold (0–1). Intervals whose CV
-                is at or below this value are flagged as suspiciously regular (C2 beaconing).
-                0.15 means ≤15% variation around the mean.
-            port_scan_threshold: Number of ports to trigger port scan alert
+            beaconing_min_interval_seconds: Minimum average gap (seconds) to consider
+                as beaconing; contacts more frequent than this are assumed normal traffic
+            beaconing_cv_threshold: Coefficient of variation threshold (0–1). Gaps whose
+                CV is at or below this value are flagged as suspiciously regular.
+                0.15 means ≤15% variation around the mean interval.
+            port_scan_threshold: Number of unique ports to trigger port scan alert
             port_scan_window_seconds: Time window for port scan detection
             spike_z_threshold: Z-score above which a 1-second bandwidth bucket is
-                flagged as a traffic spike. Default 3.0 (~99.7th percentile).
-            spike_window_seconds: Rolling history window (seconds) for baseline calculation.
-            spike_min_history_seconds: Minimum filled history buckets before alerting;
-                prevents false positives at startup.
+                flagged as a traffic spike (default 3.0, ~99.7th percentile)
+            spike_window_seconds: Rolling baseline window in seconds
+            spike_min_history_seconds: Minimum seconds of history before alerting
             internal_ip_ranges: List of IP ranges considered internal (CIDR notation)
         """
         self.exfiltration_threshold_bytes = exfiltration_threshold_mb * 1024 * 1024
         self.exfiltration_window = exfiltration_window_seconds
-        self.beaconing_interval = beaconing_interval_seconds
-        self.beaconing_tolerance = beaconing_tolerance_seconds
         self.beaconing_min_interval = beaconing_min_interval_seconds
         self.beaconing_cv_threshold = beaconing_cv_threshold
         self.port_scan_threshold = port_scan_threshold
@@ -201,7 +194,7 @@ class DetectionEngine:
         for key in list(self.beaconing_tracker.keys()):
             self.beaconing_tracker[key] = [
                 ts for ts in self.beaconing_tracker[key]
-                if current_time - ts <= self.beaconing_interval * 10  # Keep last 10 intervals
+                if current_time - ts <= 3600  # Keep up to 1 hour of history
             ]
             if not self.beaconing_tracker[key]:
                 del self.beaconing_tracker[key]

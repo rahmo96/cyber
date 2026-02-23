@@ -146,20 +146,14 @@ sudo python3 main.py --interface en0
 ## Quick Start
 
 ```bash
-# List available interfaces
-python3 main.py --list-interfaces
-
 # Live capture on eth0 (Linux)
 sudo python3 main.py --interface eth0
 
 # Replay a pcap file — no root needed
 python3 main.py --pcap capture.pcap
 
-# Live capture with BPF filter (HTTPS only)
-sudo python3 main.py --interface eth0 --bpf "tcp port 443"
-
-# Filter to a subnet and auto-export pcap on HIGH alerts
-sudo python3 main.py --interface eth0 --filter-ip 10.0.0.0/8 --export-pcap
+# Lower thresholds for a sensitive environment
+sudo python3 main.py --interface eth0 --threshold 0.5 --port-threshold 3
 
 # Run offline tests — no network or root required
 python3 test_alerts.py
@@ -170,24 +164,10 @@ python3 test_alerts.py
 ## All CLI Arguments
 
 ```
-Capture source:
-  --interface, -i       Network interface for live capture (default: system default)
-  --pcap, -p            Path to .pcap file for simulation / replay mode
-  --list-interfaces     Print available interfaces and exit
-
-Detection thresholds:
-  --threshold, -t       Exfiltration threshold in MB          (default: 1.0)
-  --beacon-interval, -b Reference beaconing interval seconds  (default: 5)
-  --port-threshold      Unique ports to trigger port scan      (default: 5)
-
-Filtering:
-  --bpf EXPR            BPF capture filter, e.g. "tcp port 80" (live only)
-  --filter-ip CIDR      Only analyse traffic involving this CIDR (repeatable)
-  --filter-protocol P   Only analyse this protocol: HTTP DNS TLS SSH … (repeatable)
-
-PCAP forensics:
-  --export-pcap         Auto-dump rolling buffer to .pcap on every HIGH alert
-  --pcap-output-dir DIR Directory for exported pcap files  (default: forensics/)
+  --interface, -i   Network interface for live capture
+  --pcap, -p        Path to .pcap file for simulation mode
+  --threshold, -t   Exfiltration alert threshold in MB  (default: 1.0)
+  --port-threshold  Unique ports to trigger port scan   (default: 5)
 ```
 
 ---
@@ -415,18 +395,6 @@ The identified protocol appears as the colour-coded **App** column in the flows 
 | `MinSizeFilter(1024)` | Match packets with payload ≥ N bytes |
 | `AcceptAllFilter()` | Pass-through — accepts every packet |
 
-### CLI filter examples
-
-```bash
-# Only analyse DNS traffic from the internal network
-python3 main.py --pcap capture.pcap --filter-ip 192.168.0.0/16 --filter-protocol DNS
-
-# Only watch HTTPS and TLS traffic
-sudo python3 main.py -i eth0 --filter-protocol TLS --filter-protocol HTTP
-
-# BPF at kernel level (TCP only), then narrow to a subnet in Python
-sudo python3 main.py -i eth0 --bpf "tcp" --filter-ip 10.0.0.0/8
-```
 
 ---
 
@@ -507,7 +475,7 @@ python3 test_alerts.py
 - **Privilege model** — Prefer `setcap cap_net_raw` over running the full process as root. This minimises the attack surface while still allowing packet capture.
 - **CSV log** — `alerts_log.csv` may contain IP addresses and flow metadata. Apply appropriate file permissions.
 - **PCAP exports** — Files in `forensics/` contain raw packet payloads and may include credentials, session tokens, or other sensitive data. Treat accordingly.
-- **False positives** — All detection is heuristic. Tune thresholds (`--threshold`, `--port-threshold`, `--beacon-interval`) for your network's baseline behaviour.
+- **False positives** — All detection is heuristic. Tune thresholds (`--threshold`, `--port-threshold`) for your network's baseline behaviour.
 - **Encrypted traffic** — TLS/HTTPS payload contents are not analysed; DPI only identifies the protocol from the handshake header.
 
 ---
