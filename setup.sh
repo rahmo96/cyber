@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# NetGuard-CLI — Linux Setup Script
+# Network Traffic Analyzer — Linux Setup Script
 #
 # Usage:
 #   chmod +x setup.sh
@@ -29,7 +29,7 @@ for arg in "$@"; do
 done
 
 # ---------------------------------------------------------------------------
-header "=== NetGuard-CLI Linux Setup ==="
+header "=== Network Traffic Analyzer Setup ==="
 # ---------------------------------------------------------------------------
 
 # 1. Detect Linux distribution
@@ -114,7 +114,7 @@ PYTHON_BIN=$(readlink -f "$VENV_DIR/bin/python3")
 
 if [[ "$SUDO_ONLY" == true ]]; then
     warn "--sudo-only flag set: skipping setcap."
-    echo -e "  Run the tool with: ${CYAN}sudo $VENV_DIR/bin/python3 main.py${NC}"
+    echo -e "  Run the tool with: ${CYAN}sudo $VENV_DIR/bin/python3 src/main.py${NC}"
 else
     if ! command -v setcap &>/dev/null; then
         warn "setcap not found. Install libcap2-bin (Debian/Ubuntu) or libcap (Fedora)."
@@ -123,21 +123,21 @@ else
         info "Granting cap_net_raw to $PYTHON_BIN ..."
         if sudo setcap cap_net_raw,cap_net_admin=eip "$PYTHON_BIN"; then
             success "Capability granted. You can now run WITHOUT sudo:"
-            echo -e "  ${CYAN}$VENV_DIR/bin/python3 main.py --interface eth0${NC}"
+            echo -e "  ${CYAN}$VENV_DIR/bin/python3 src/main.py --interface eth0${NC}"
         else
             warn "setcap failed. You will need to run with sudo:"
-            echo -e "  ${CYAN}sudo $VENV_DIR/bin/python3 main.py --interface eth0${NC}"
+            echo -e "  ${CYAN}sudo $VENV_DIR/bin/python3 src/main.py --interface eth0${NC}"
         fi
     fi
 fi
 
 # 7. Quick smoke test (no network, no root needed)
 header "Running unit tests (simulation mode)..."
-if "$VENV_DIR/bin/python3" test_alerts.py > /dev/null 2>&1; then
+if "$VENV_DIR/bin/python3" tests/test_alerts.py > /dev/null 2>&1; then
     success "All tests passed"
 else
     warn "Tests produced output -- run manually to inspect:"
-    echo -e "  ${CYAN}$VENV_DIR/bin/python3 test_alerts.py${NC}"
+    echo -e "  ${CYAN}$VENV_DIR/bin/python3 tests/test_alerts.py${NC}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -148,9 +148,9 @@ echo "Activate the virtual environment:"
 echo -e "  ${CYAN}source venv/bin/activate${NC}"
 echo
 echo "Usage examples:"
-echo -e "  ${CYAN}python3 main.py --list-interfaces${NC}          # list network interfaces"
-echo -e "  ${CYAN}python3 main.py --interface eth0${NC}           # live capture (needs root/cap)"
-echo -e "  ${CYAN}python3 main.py --pcap capture.pcap${NC}        # replay a pcap file (no root)"
-echo -e "  ${CYAN}python3 main.py --interface eth0 --bpf 'tcp port 443'${NC}   # with BPF filter"
-echo -e "  ${CYAN}python3 main.py --export-pcap${NC}              # auto-dump pcap on HIGH alerts"
+echo -e "  ${CYAN}python3 src/main.py --list-interfaces${NC}          # list network interfaces"
+echo -e "  ${CYAN}python3 src/main.py --interface eth0${NC}           # live capture (needs root/cap)"
+echo -e "  ${CYAN}python3 src/main.py --pcap capture.pcap${NC}        # replay a pcap file (no root)"
+echo -e "  ${CYAN}python3 src/main.py --interface eth0 --bpf 'tcp port 443'${NC}   # with BPF filter"
+echo -e "  ${CYAN}python3 src/main.py --export-pcap${NC}              # auto-dump pcap on HIGH alerts"
 echo
