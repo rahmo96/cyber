@@ -305,7 +305,13 @@ class DetectionEngine:
         key = (source_ip, dest_ip)
         current_time = packet.timestamp
 
-        self.beaconing_tracker[key].append(current_time)
+        # One contact event per beaconing_min_interval window.
+        # A single HTTP/TLS session produces dozens of packets within milliseconds;
+        # recording all of them would pollute the interval history with near-zero gaps,
+        # making the CV huge and masking the true beacon cadence.
+        last_contact = self.beaconing_tracker[key][-1] if self.beaconing_tracker[key] else None
+        if last_contact is None or (current_time - last_contact) >= self.beaconing_min_interval:
+            self.beaconing_tracker[key].append(current_time)
 
         # Need at least 6 contact points (5 intervals) for a reliable pattern
         if len(self.beaconing_tracker[key]) < 6:

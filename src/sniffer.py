@@ -197,9 +197,20 @@ class NetworkSniffer:
         consumer_thread = threading.Thread(target=consumer, daemon=True)
         consumer_thread.start()
 
+        # When no interface is specified, sniff on every available interface
+        # so loopback traffic (127.0.0.1 on 'lo') is captured alongside normal
+        # traffic — required for trigger.sh's port-scan simulation target.
+        iface: object = self.interface
+        if not iface:
+            try:
+                from scapy.interfaces import get_if_list
+                iface = get_if_list() or None
+            except Exception:
+                iface = None
+
         try:
             sniff(
-                iface=self.interface or None,
+                iface=iface,
                 filter=self.bpf_filter or None,
                 prn=producer,
                 store=False,
