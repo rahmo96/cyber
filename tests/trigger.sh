@@ -21,21 +21,21 @@ trigger_port_scan() {
 trigger_exfiltration() {
     echo -e "${CYAN}[*] Simulating Data Exfiltration...${NC}"
     # Sends 2MB of random data to an external server
-    dd if=/dev/urandom bs=1M count=2 2>/dev/null | curl -s -X POST --data-binary @- http://httpbin.org/post >/dev/null &
+    dd if=/dev/urandom bs=6M count=2 2>/dev/null | curl -s -X POST --data-binary @- http://httpbin.org/post >/dev/null &
     echo "    2MB transfer started in the background."
 }
 
 trigger_spike() {
     echo -e "${CYAN}[*] Simulating sudden Traffic Spike...${NC}"
     # Sends a 5MB burst to create a bandwidth anomaly (high Z-score)
-    (dd if=/dev/urandom bs=1M count=5 2>/dev/null | nc -q1 8.8.8.8 80) &
+    (dd if=/dev/urandom bs=5M count=5 2>/dev/null | nc -q1 8.8.8.8 80) &
     echo "    5MB traffic spike sent."
 }
 
 trigger_beaconing() {
     echo -e "${CYAN}[*] Simulating C2 Beaconing...${NC}"
     # Creates an exact connection every 10 seconds
-    (for i in $(seq 1 10); do curl -s https://example.com -o /dev/null; sleep 10; done) &
+    (for i in $(seq 1 100); do curl -s https://example.com -o /dev/null; sleep 5; done) &
     echo "    Background process will contact external server every 10s (~1 min to detect)."
 }
 
