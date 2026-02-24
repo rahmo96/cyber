@@ -53,10 +53,10 @@ Attackers exfiltrated ~700 GB of healthcare data before detonating the ransomwar
 
 #### Stage 2 — C2 Beaconing
 Conti used Cobalt Strike C2 infrastructure to maintain persistent access. NetGuard-CLI detects this by:
-- Collecting inter-packet gap timestamps for every `(internal → external)` pair
-- Computing the **coefficient of variation** (CV = std_dev / mean) over the last 8 gaps
+- Recording one **contact event** per destination per `beaconing_min_interval` window, so that the many TCP/TLS packets belonging to a single HTTP request count as a single beacon (not dozens of near-zero-gap noise points)
+- Computing the **coefficient of variation** (CV = std_dev / mean) over the last 8 contact gaps
 - Firing when CV ≤ 0.15 (≤15% variation) — machine-precise timing that no human browsing pattern produces
-- Works at **any interval** (30 s, 5 min, 1 hr) — not just a single configured value
+- Works at **any interval** (5 s, 30 s, 5 min, 1 hr) — not just a single configured value
 
 #### Stage 3 — Port Scanning
 Reconnaissance and lateral movement involved rapid port enumeration. NetGuard-CLI detects this by:
@@ -146,17 +146,23 @@ sudo python3 main.py --interface en0
 ## Quick Start
 
 ```bash
-# Live capture on eth0 (Linux)
+# Live capture on all interfaces — loopback included (Linux)
+sudo python3 main.py
+
+# Live capture on a specific interface only
 sudo python3 main.py --interface eth0
 
 # Replay a pcap file — no root needed
 python3 main.py --pcap capture.pcap
 
 # Lower thresholds for a sensitive environment
-sudo python3 main.py --interface eth0 --threshold 0.5 --port-threshold 3
+sudo python3 main.py --threshold 0.5 --port-threshold 3
 
 # Run offline tests — no network or root required
 python3 tests/test_alerts.py
+
+# Interactive live trigger menu (requires running monitor in another terminal first)
+./tests/trigger.sh
 ```
 
 ---
@@ -185,54 +191,87 @@ Injects crafted packets directly into the engine. Fires all 6 alert types in ~15
 | Test | Alert | How it's triggered |
 |---|---|---|
 | 1 | Data Exfiltration | 12 × 100 KB packets to the same external IP cross the 1 MB threshold |
-| 2 | C2 Beaconing | 8 packets exactly 10 s apart produce CV = 0.00 |
+| 2 | C2 Beaconing | 8 contact events exactly 10 s apart produce CV = 0.00 |
 | 3 | Port Scan | Hits ports 22, 80, 443, 3389, 8080, 8443, 21, 25 in 4 seconds |
 | 4 | Traffic Spike | 15 s of ~10 KB/s baseline then a 500 KB burst (Z ≈ 97) |
 | 5 | DPI | Verifies HTTP / TLS / SSH / DNS / RDP payload recognition |
 | 6 | Filters | Verifies `&`, `\|`, `~` filter combinators |
 
-### Option 2 — Real traffic (requires root / setcap)
+### Option 2 — Live trigger script (requires root / setcap + Linux)
+
+`tests/trigger.sh` is an interactive menu that fires each alert type using real traffic.
+
+**Terminal 1 — start the monitor:**
+```bash
+sudo python3 main.py
+```
+
+> No `--interface` needed — the tool automatically captures on **all interfaces** including loopback (`lo`), so both local (port scan) and external (exfiltration, beaconing, spike) traffic is detected.
+
+**Terminal 2 — run the trigger menu:**
+```bash
+chmod +x tests/trigger.sh
+./tests/trigger.sh
+```
+
+```
+=========================================
+  Live Traffic Trigger Menu (Bash)
+=========================================
+1. Trigger Port Scan
+2. Trigger Data Exfiltration
+3. Trigger Traffic Spike
+4. Trigger C2 Beaconing
+5. Trigger ALL
+0. Exit
+=========================================
+```
+
+| Option | Alert expected | What happens | Time to alert |
+|---|---|---|---|
+| 1 | Port Scan (MEDIUM) | TCP probes to 8 ports on `127.0.0.1` | Immediate |
+| 2 | Data Exfiltration (HIGH) | 12 MB POST to `httpbin.org` | ~5 s |
+| 3 | Traffic Spike (MEDIUM) | 25 MB burst to `8.8.8.8:80` | ~10 s baseline needed first |
+| 4 | C2 Beaconing (HIGH) | `curl https://example.com` every 5 s | ~30 s (6 contacts) |
+| 5 | All of the above | Runs options 1–4 in sequence | See above |
+
+### Option 3 — Manual real-traffic commands
 
 Start the tool first in one terminal:
 ```bash
-sudo python3 main.py --interface eth0
+sudo python3 main.py
 ```
 
 Then run one of these in a second terminal:
 
 #### Data Exfiltration — send >1 MB to an external IP
 ```bash
-# Send 2 MB via curl
-dd if=/dev/urandom bs=1M count=2 | curl -s -X POST --data-binary @- http://httpbin.org/post
+dd if=/dev/urandom bs=6M count=2 2>/dev/null | curl -s -X POST --data-binary @- http://httpbin.org/post
 ```
 
 #### C2 Beaconing — contact the same external IP on a fixed interval
 ```bash
-# Contact example.com every 10 seconds (needs 6+ repetitions to build the pattern)
-for i in $(seq 1 10); do
+# Contact example.com every 5 seconds (alert fires after 6 contacts, ~30 s)
+for i in $(seq 1 20); do
     curl -s https://example.com -o /dev/null
-    sleep 10
+    sleep 5
 done
 ```
 
-#### Port Scan — hit multiple ports on an internal host
+#### Port Scan — hit multiple ports on localhost
 ```bash
-# With nmap
-nmap -p 22,80,443,3389,8080,8443,21,25 192.168.1.x
-
-# Without nmap — bash TCP probes
 for port in 22 80 443 3389 8080 8443 21 25; do
-    (echo >/dev/tcp/192.168.1.x/$port) 2>/dev/null &
+    (echo >/dev/tcp/127.0.0.1/$port) 2>/dev/null &
 done
 ```
 
-#### Traffic Spike — burst after idle
+#### Traffic Spike — burst after baseline builds
 ```bash
-# Build a baseline for 15 s, then blast 5 MB
-sleep 15 && dd if=/dev/urandom bs=1M count=5 | nc -q1 8.8.8.8 80
+# Wait 10 s for baseline to accumulate, then send a large burst
+sleep 10 && dd if=/dev/urandom bs=5M count=5 2>/dev/null | nc -q1 8.8.8.8 80
 ```
 
-### Option 3 — Replay a real malware pcap
+### Option 4 — Replay a real malware pcap
 
 ```bash
 # No root required for pcap replay
@@ -270,7 +309,7 @@ netguard-cli/
 
 | Module | Responsibility |
 |---|---|
-| `src/sniffer.py` | Raw capture via Scapy; DPI-enriched `PacketInfo`; producer/consumer queue (10k capacity) to prevent packet loss; rolling 1000-packet PCAP buffer |
+| `src/sniffer.py` | Raw capture via Scapy on **all interfaces** (including `lo`) when no `--interface` is given; DPI-enriched `PacketInfo`; producer/consumer queue (10k capacity) to prevent packet loss; rolling 1000-packet PCAP buffer |
 | `src/dpi.py` | Stateless payload inspector — identifies 10+ protocols by signature, falls back to well-known port table |
 | `src/filters.py` | BPF-style composable filters combined with `&` (AND), `\|` (OR), `~` (NOT) |
 | `src/analyzer.py` | Four detection algorithms each with independent alert cooldown/deduplication |
@@ -316,9 +355,9 @@ Sliding-window cumulative byte counter per `(source_ip, dest_ip)` pair.
 
 Statistical regularity detector on inter-contact timestamps.
 
-- Records every contact timestamp for each `(internal → external)` pair
-- Requires 6+ contacts (5 intervals) before evaluating
-- Computes **CV = std\_dev / mean** over the last 8 intervals
+- **Contact deduplication**: only one timestamp is recorded per destination per `beaconing_min_interval` (2 s). The many TCP/TLS packets of a single HTTP session all arrive within milliseconds of each other and are collapsed to a single contact event. Without this, a `curl` call would inject ~20 near-zero-gap entries that destroy the CV calculation.
+- Requires 6+ contact events (5 intervals) before evaluating
+- Computes **CV = std\_dev / mean** over the last 8 contact intervals
 - Fires when CV ≤ 0.15 and avg interval ≥ 2 s (to ignore legitimate high-frequency traffic)
 - Cooldown = avg\_interval × number\_of\_intervals\_analysed
 - Alert includes avg interval, std dev, CV, and beacon count
@@ -502,13 +541,14 @@ sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))
 ```bash
 # List available interfaces
 ip link show
-python3 -c "from scapy.all import get_if_list; print(get_if_list())"
+python3 -c "from scapy.interfaces import get_if_list; print(get_if_list())"
 
-# Try the loopback interface for basic connectivity testing
-sudo python3 main.py --interface lo
+# Running without --interface already captures on ALL interfaces (including lo).
+# If you still see nothing, verify traffic is present:
+sudo tcpdump -i any -c 5
 
-# Verify traffic is present on the interface
-sudo tcpdump -i eth0 -c 5
+# Or pin to a specific interface
+sudo python3 main.py --interface eth0
 ```
 
 ### Alerts not firing
