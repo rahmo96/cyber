@@ -1,12 +1,13 @@
 """
-Main Entry Point for NetGuard-CLI
-HSE-Incident Detection Tool
+Main Entry Point for NetGuard-CLI — HSE-Incident Detection Tool
 
-Linux notes:
-  - Live capture needs root or cap_net_raw:
-      sudo python3 main.py --interface eth0
-      sudo setcap cap_net_raw,cap_net_admin=eip $(readlink -f $(which python3))
-  - List interfaces: ip link show
+Data flow (see EXECUTIVE_SUMMARY.md for details):
+  1. Capture  — Sniffer grabs raw packets (live or pcap).
+  2. Extract  — Each packet becomes a PacketInfo (IPs, ports, size, time).
+  3. Analyze  — DetectionEngine checks for exfil, beaconing, port scan, spike.
+  4. Alert    — Log, optional PCAP export, and dashboard update.
+
+Linux: Live capture needs root or cap_net_raw (sudo python3 main.py or setcap).
 """
 
 import _thread
