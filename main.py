@@ -108,7 +108,6 @@ class NetGuardCLI:
         )
         self.logger = AlertLogger()
         self.dashboard = Dashboard()
-        self.pcap_exporter = PcapExporter(self.sniffer, output_dir=pcap_output_dir)
 
         self.traffic_filter: TrafficFilter = build_filter(
             ip_ranges=filter_ips,
@@ -280,10 +279,6 @@ def main() -> None:
         description="NetGuard-CLI: HSE-Incident Detection Tool",
     )
 
-    parser.add_argument("--interface", "-i", type=str, default=None,
-                        help="Network interface for live capture")
-    parser.add_argument("--pcap", "-p", type=str, default=None,
-                        help="Path to .pcap file for simulation mode")
     parser.add_argument("--threshold", "-t", type=float, default=1.0,
                         help="Exfiltration alert threshold in MB (default: 1.0)")
     parser.add_argument("--port-threshold", type=int, default=5,
@@ -298,7 +293,6 @@ def main() -> None:
     if args.port_threshold <= 0:
         parser.error("--port-threshold must be > 0")
 
-    _check_privileges(live_capture=args.pcap is None)
 
     app = NetGuardCLI(
         interface=args.interface,
