@@ -30,10 +30,6 @@ from src.sniffer import NetworkSniffer, PacketInfo
 from src.ui import Dashboard
 
 
-# ---------------------------------------------------------------------------
-# Privilege helpers
-# ---------------------------------------------------------------------------
-
 def _is_root() -> bool:
     """Return True if the process has root / administrator privileges."""
     try:
@@ -75,10 +71,6 @@ def _check_privileges(live_capture: bool) -> None:
             "  Run as Administrator or use simulation mode (--pcap <file>).\n"
         )
 
-
-# ---------------------------------------------------------------------------
-# Main application class
-# ---------------------------------------------------------------------------
 
 class NetGuardCLI:
     """Main application class for NetGuard-CLI."""
@@ -132,10 +124,6 @@ class NetGuardCLI:
         signal.signal(signal.SIGINT,  self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
-    # ------------------------------------------------------------------
-    # Signal handling
-    # ------------------------------------------------------------------
-
     def _signal_handler(self, signum, frame) -> None:
         """
         Graceful shutdown on SIGINT / SIGTERM.
@@ -145,10 +133,6 @@ class NetGuardCLI:
         """
         self._shutdown.set()
         _thread.interrupt_main()
-
-    # ------------------------------------------------------------------
-    # Packet processing
-    # ------------------------------------------------------------------
 
     def _packet_callback(self, packet_info: PacketInfo) -> None:
         """Called by the sniffer thread for every captured packet."""
@@ -172,10 +156,6 @@ class NetGuardCLI:
                         if path:
                             # Safe to log here; Rich console is thread-safe
                             self.console.log(f"[cyan]PCAP exported:[/cyan] {path}")
-
-    # ------------------------------------------------------------------
-    # Main loop
-    # ------------------------------------------------------------------
 
     def run(self) -> None:
         """Run the main monitoring loop."""
@@ -267,11 +247,6 @@ class NetGuardCLI:
         except Exception as exc:
             self.console.print(f"[red]Capture error: {exc}[/red]")
             self._shutdown.set()
-
-
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
 
 
 def main() -> None:

@@ -25,10 +25,6 @@ from typing import List, Optional
 from .sniffer import PacketInfo
 
 
-# ---------------------------------------------------------------------------
-# Base class and boolean combinators
-# ---------------------------------------------------------------------------
-
 class TrafficFilter(ABC):
     """Abstract base class for all traffic filters."""
 
@@ -71,10 +67,6 @@ class _NotFilter(TrafficFilter):
     def matches(self, packet: PacketInfo) -> bool:
         return not self._inner.matches(packet)
 
-
-# ---------------------------------------------------------------------------
-# Concrete filter implementations
-# ---------------------------------------------------------------------------
 
 class AcceptAllFilter(TrafficFilter):
     """Pass-through filter — accepts every packet."""
@@ -190,10 +182,6 @@ class MinSizeFilter(TrafficFilter):
     def matches(self, packet: PacketInfo) -> bool:
         return packet.payload_size >= self._min
 
-
-# ---------------------------------------------------------------------------
-# Convenience factory
-# ---------------------------------------------------------------------------
 
 def build_filter(
     ip_ranges: Optional[List[str]] = None,

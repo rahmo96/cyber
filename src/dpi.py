@@ -76,10 +76,6 @@ class DeepPacketInspector:
 
         return "Unknown"
 
-    # ------------------------------------------------------------------
-    # Private payload inspectors
-    # ------------------------------------------------------------------
-
     def _inspect_payload(
         self,
         payload: bytes,

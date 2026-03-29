@@ -32,6 +32,7 @@ done
 header "=== Network Traffic Analyzer Setup ==="
 # ---------------------------------------------------------------------------
 
+
 # 1. Detect Linux distribution
 if [[ -f /etc/os-release ]]; then
     # shellcheck disable=SC1091

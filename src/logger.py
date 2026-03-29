@@ -71,18 +71,12 @@ class AlertLogger:
         except Exception as exc:
             print(f"[logger] Error writing alerts: {exc}")
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     def _ensure_header(self) -> None:
         """Write the CSV header row if the file does not yet exist."""
         if not os.path.exists(self.log_file):
             with open(self.log_file, "w", newline="", encoding="utf-8") as fh:
                 csv.DictWriter(fh, fieldnames=self._FIELDNAMES).writeheader()
 
-
-# ---------------------------------------------------------------------------
 
 class PcapExporter:
     """
