@@ -258,6 +258,18 @@ def main() -> None:
                         help="Exfiltration alert threshold in MB (default: 1.0)")
     parser.add_argument("--port-threshold", type=int, default=5,
                         help="Unique ports to trigger port scan alert (default: 5)")
+    parser.add_argument(
+        "--interface", "-i",
+        default=None,
+        metavar="IFACE",
+        help="Network interface for live capture (omit for Scapy default)",
+    )
+    parser.add_argument(
+        "--pcap",
+        default=None,
+        metavar="FILE",
+        help="Replay packets from a PCAP file instead of live capture",
+    )
 
     args = parser.parse_args()
 
