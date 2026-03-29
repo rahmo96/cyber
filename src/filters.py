@@ -1,20 +1,4 @@
-"""
-Traffic Filter Module for NetGuard-CLI
 
-Provides a composable, BPF-style filtering system for PacketInfo objects.
-Filters can be combined with the & (AND), | (OR), and ~ (NOT) operators.
-
-Example usage:
-
-    # Accept only HTTP/HTTPS traffic from the 10.0.0.0/8 subnet
-    f = IPRangeFilter("10.0.0.0/8") & ProtocolFilter("HTTP", "TLS")
-
-    if f.matches(packet):
-        process(packet)
-
-    # Build programmatically from CLI args
-    f = build_filter(ip_ranges=["192.168.0.0/16"], protocols=["DNS"])
-"""
 
 from __future__ import annotations
 

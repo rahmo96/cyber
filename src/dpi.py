@@ -1,14 +1,4 @@
-"""
-Deep Packet Inspection (DPI) Module for NetGuard-CLI
 
-Identifies application-layer protocols by inspecting raw packet payloads
-rather than relying solely on port numbers.  Port-based fallback is used
-when the payload is empty (e.g. TCP SYN packets) or unrecognised.
-
-Detection order:
-  1. Payload signature matching  — reliable, port-independent
-  2. Well-known port fallback    — for encrypted / headerless protocols
-"""
 
 from typing import Optional
 

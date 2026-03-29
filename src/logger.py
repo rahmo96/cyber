@@ -1,12 +1,4 @@
-"""
-Logger Module for NetGuard-CLI
 
-Handles two kinds of output:
-  1. AlertLogger   — appends security alerts to a CSV file (thread-safe).
-  2. PcapExporter  — exports the sniffer's rolling packet buffer to a .pcap
-                     file whenever a suspicious alert is generated, enabling
-                     post-incident forensic analysis in Wireshark.
-"""
 
 import csv
 import os
